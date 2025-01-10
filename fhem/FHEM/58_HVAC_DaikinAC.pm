@@ -28,6 +28,7 @@ use Blocking;
 # REMINDER: Don't forget to update version number in META.json info at bottom of file
 #
 our %HVAC_DaikinAC_VERSION = (
+  "1.0.10"  => "07.01.2025  Added demand control feature (power limitation)",
   "1.0.9"  => "28.05.2020  Added on and off shortcut commands, as expected by for example the Alexa module",
   "1.0.8"  => "21.04.2020  Initial checkin into FHEM repository. Fixed some syntax errors in documentation HTML. No code changes",
   "1.0.7"  => "11.04.2020  Added two examples to define Usage error and documentation; add interval and interval_powered attributes on startup for clarity; Poll daily and monthly power usage statistics once per hour, so that the current days and current months usage are represented correctly",
@@ -194,14 +195,16 @@ sub HVAC_DaikinAC_Write {
 	my $hash	= $defs{$name};
 	Log3 ($name, 5, "$name HVAC_DaikinAC_Write($s): starting");
 
-	my ($chmode, $pow, $f_mode, $stemp, $shum, $f_rate, $f_dir) = (
+	my ($chmode, $pow, $f_mode, $stemp, $shum, $f_rate, $f_dir, $demand_control, $demand_control_limit) = (
 		0,
 		$defs{$name}{"READINGS"}{"pow"}{"VAL"},
 		$defs{$name}{"READINGS"}{"f_mode"}{"VAL"},
 		$defs{$name}{"READINGS"}{"stemp"}{"VAL"},
 		$defs{$name}{"READINGS"}{"shum"}{"VAL"},
 		$defs{$name}{"READINGS"}{"f_rate"}{"VAL"},
-		$defs{$name}{"READINGS"}{"f_dir"}{"VAL"}
+		$defs{$name}{"READINGS"}{"f_dir"}{"VAL"},
+		$defs{$name}{"READINGS"}{"demand_control"}{"VAL"} || 0,
+		$defs{$name}{"READINGS"}{"demand_control_limit"}{"VAL"} || 0
 	);
 
 	# Process changes provided in $s
@@ -228,6 +231,56 @@ sub HVAC_DaikinAC_Write {
 		};
 		$key eq "reboot" && $val == 1 && do {
 			$q = sprintf($q . "common/reboot");
+			last SWITCH;
+		};
+		$key eq "demand_control" && do {
+			my $en_demand=0;
+			my $mode=0;
+			SWITCH2: {
+				$demand_control eq "on" && do {
+					$en_demand=1;
+					$mode=0;
+					last SWITCH2;
+				};
+				$demand_control eq "auto" && do {
+					$en_demand=1;
+					$mode=2;
+					last SWITCH2;
+				};
+				$demand_control eq "timer" && do {
+					$en_demand=1;
+					$mode=1;
+					last SWITCH2;
+				};
+			};
+			SWITCH2: {
+				$val eq "0" && do {
+					$en_demand=0;
+					last SWITCH2;
+				};
+				$val eq "1" && do {
+					$en_demand=1;
+					$mode=0;
+					last SWITCH2;
+				};
+				$val eq "2" && do {
+					$en_demand=1;
+					$mode=2;
+					last SWITCH2;
+				};
+				# Any other value must be a percentage
+				$en_demand=1;
+				$mode=0;
+				$demand_control_limit=int($val/5)*5;
+				$demand_control_limit=40 if $demand_control_limit < 40;
+				$demand_control_limit=100 if $demand_control_limit > 100;
+			};
+
+			$q = sprintf($q . "aircon/set_demand_control?en_demand=%d&mode=%d&max_pow=%d&type=1&moc=0&tuc=0&wec=0&thc=0&frc=0&sac=0&suc=0",
+				$en_demand,
+				$mode,
+				$demand_control_limit
+			);
 			last SWITCH;
 		};
 
@@ -446,6 +499,14 @@ sub HVAC_DaikinAC_Set($@) {
 			$s = sprintf("econo=%d", $val eq "off" || !$val?0:1);
 			last SWITCH;
 		};
+		$cmd eq "demand_control" && do {
+			my $val = shift @a or 1;
+			$val = 0 if $val eq "off";
+			$val = 1 if $val eq "on";
+			$val = 2 if $val eq "auto";
+			$s = sprintf("demand_control=%d", $val);
+			last SWITCH;
+		};
 		$cmd eq "streamer" && do {
 			my $val = shift @a or 1;
 			$s = sprintf("streamer=%d", $val eq "off" || !$val?0:1);
@@ -475,6 +536,7 @@ usage:
 		"rate:".join(',', map{$HVAC_DaikinAC_RATE{$_}} keys %HVAC_DaikinAC_RATE) . " " .
 		"powerful:on,off" . " " .
 		"econo:on,off" . " " .
+		"demand_control:on,auto,off,0,1,2,40,45,50,55,60,65,70,75,80,85,90,95,100" . " " .
 		"streamer:on,off" . " " .
 		"reboot:nodata" . " " .
 		"shum:slider,0,5,100" . " " .
@@ -610,7 +672,7 @@ sub HVAC_DaikinAC_StartPoll($) {
 # Return: true is successfull, false otherwise
 #
 sub HVAC_DaikinAC_Parse {
-	my ($name, $r, $s, $l) = @_;
+	my ($name, $r, $s, $l, $simple) = @_;
 	my @F = split ',', $s;
 	my %L = map { $_ => 1 } split(/,/, $l);
 
@@ -627,6 +689,7 @@ sub HVAC_DaikinAC_Parse {
 		my ($key, $val) = split(/=/, $_, 2);
 		next if !exists($L{$key});
 		SWITCH: {
+			last SWITCH if $simple;
 			$key eq "mode" && do {
 				our %HVAC_DaikinAC_MODE;
 				$r->{"mode"} = $HVAC_DaikinAC_MODE{$val} || 'unknown';
@@ -925,6 +988,27 @@ sub HVAC_DaikinAC_Poll($) {
 	};
 	$r->{"sensor_info"} = $s->content if AttrVal($name, "rawdata", 0);
 
+	#
+	# demand control info (power limit feature)
+	#
+        $req = HTTP::Request->new('GET', 'http://' . $hash->{"HOST"} . "/aircon/get_demand_control");
+        $s = $ua->request($req);
+	my $demand = {};
+	HVAC_DaikinAC_Parse($name, $demand, $s->content, "en_demand,mode,type,max_pow", 1) or do {
+		$r->{"ERR"}="Invalid response on get_demand_control: " . $s->content;
+		goto POLL_END;
+	};
+	if ($demand->{"type"}) {
+		$r->{"demand_control_limit"} = $demand->{"max_pow"} || 100;
+		$r->{"demand_control"} = "off" if !$demand->{"en_demand"};
+		$r->{"demand_control"} = "timer" if $demand->{"en_demand"} && $demand->{"mode"} == 1;
+		$r->{"demand_control"} = "on" if $demand->{"en_demand"} && $demand->{"mode"} == 0;
+		$r->{"demand_control"} = "auto" if $demand->{"en_demand"} && $demand->{"mode"} == 2;
+	} else {
+		$r->{"demand_control_limit"} = 100;
+		$r->{"demand_control"} = "NOTSUPPORT";
+	}
+	$r->{"get_demand_control"} = $s->content if AttrVal($name, "rawdata", 0);
 
 	Log3($name, 5, "$name HVAC_DaikinAC_Poll(): poll done");
 	Log3($name, 5, "$name HVAC_DaikinAC_Poll(): return " . encode_json($r));
@@ -1074,6 +1158,7 @@ Supported adapters are:
  </ul>
 
 <p>
+ <a id="HVAC_DaikinAC-define"><a>
  <b>Define</b>
  <p>
    <code>define &lt;name&gt; HVAC_DaikinAC &lt;hostname or ip&gt; [interval] [interval_powered]</code>
@@ -1116,6 +1201,8 @@ when turned off and 60 seconds when the unit is powered on.</li>
    <li><b>adv</b>: List of currently active additional settings, slash seperated (2=powerful, 13=streamer)</li>
    <li><b>powerful</b>: [ on | off ] Current status of "Powerful" special mode (powerful ventilation, automatically turned off by unit after 20 mins)</li>
    <li><b>econo</b>: [ on | off ] Current status of "Econo" special mode (econo mode)</li>
+   <li><b>demand_control</b>: [ on | off | auto | timer | NOTSUPPORT ] Current status of "Demand control" (power limitation) feature. Returns "NOTSUPPORT" if the feature is not available for this unit. In that case, the limit is always 100%</li>
+   <li><b>demand_control_limit</b>: Current / stored limit for the demand control power limitation feature. Limit is only applicable/active when demand_control is set to on. Otherwise, it simply is the stored limit that will become the active limit is "demand_control on" is set.</li>
    <li><b>streamer</b>: [ on | off ] Current status of "Streamer" special mode (ionized air cleaner)</li>
    <li><b>cmpfreq</b>: Current compressor frequency in number of revolutions per second</li>
    <li><b>cmpfreq_max</b>: Maximum compressor frequency observed since creation</li>
@@ -1166,13 +1253,19 @@ when turned off and 60 seconds when the unit is powered on.</li>
 	</ul>
 
 <p>
+ <a id="HVAC_DaikinAC-attr"><a>
  <b>Attributes</b>
  <ul>
+   <a id="HVAC_DaikinAC-attr-disable"></a>
    <li><b>disable</b>: [ 0 | 1 ] If set to 1, disable all polling. Set will not be possible on a disabled device. If you just need to stop automatic polls, use the "interval" attribute</li>
+   <a id="HVAC_DaikinAC-attr-interval"></a>
    <li><b>interval</b>: Set the polling interval (in seconds). This will override the interval as set in the define command. If set to "0", no more scheduled polling will happen. However, the device will be polled one time directly following a "set" command so that the requested change is reflected in the readings. A poll can also be forced by issuing the "set refresh" command. Keep in mind that any change in ambient or outside temperature will not be reflected in FHEM. Also, any changes resulting from a control action that was initiated through another channel (e.g. the remote control or Daikin's online controller) will not be reflected in the FHEM device readings.</li>
+   <a id="HVAC_DaikinAC-attr-interval_powered"></a>
    <li><b>interval_powered</b>: Set the polling interval (in seconds) in case the unit is turned on.</li>
+   <a id="HVAC_DaikinAC-attr-pwrconsumption"></a>
    <li><b>pwrconsumption</b>: [ 0 | 1 ] If set to 1, power consumption data is read from the unit and stored in the readings specified above. This is not supported by older units, who will return all 0 readings for power usage. All consumption data is represented in kWh, as a floating point number with a precision of 1/10 kWh. For all of the the pwr_period_last readings readings to be correctly updated, automatic polling must be enabled with an interval of at most 3600 seconds (1 hour).</li>
 
+   <a id="HVAC_DaikinAC-attr-rawdata"></a>
    <li><b>rawdata</b>: [ 0 | 1 ] If set to 1, 4 extra readings will be generated:
 	<ul>
 	 <li><b>basic_info</b>: Raw data from get_basic_info request (on new define or after "set refresh")</li>
@@ -1180,6 +1273,7 @@ when turned off and 60 seconds when the unit is powered on.</li>
 	 <li><b>sensor_info</b>: Raw data from get_sensor_info request (on each poll or after set command)</li>
 	 <li><b>control_info</b>: Raw data from get_control_info request (on each poll or after set command)</li>
 	</ul></li>
+   <a id="HVAC_DaikinAC-attr-timeout"></a>
    <li><b>timeout</b>: Sets the request timeout - default 5 seconds. Any request to the airconditioner will be aborted after this interval and readings will not be updated. Only set to a higher value if you have a very slow or unreliable network connection to the airconditioner and you are aware of what you are doing. A value as low a 1 second should work just fine under normal circumstances.</li>
  </ul>
 
@@ -1194,6 +1288,7 @@ attr [devicename] devStateIcon off.*:control_standby@gray on.*cool:frost@blue on
 
 <p>
 
+ <a id="HVAC_DaikinAC-set"><a>
  <b>Set</b>
   <ul>
    <li><b>refresh</b>: Force immediate poll of device - will also request and update version and device info</li>
@@ -1208,11 +1303,16 @@ attr [devicename] devStateIcon off.*:control_standby@gray on.*cool:frost@blue on
    <li><b>powerful</b>: [ on | off ] Activate or deactivate powerful mode if unit supports remote activation. Older models will not support this option, even though the powerful mode is present and can be controlled through the IR remote.</li>
    <li><b>streamer</b>: [ on | off ] Activate or deactivate ion streamer mode if present</li>
    <li><b>econo</b>: [ on | off ] Activate or deactivate econo mode if present and units supports remote activation</li>
+   <li><b>demand_control</b>: [ on auto off 0 1 40-100 ] Activate or deactivate demand control (power limitation) mode. On restores previous used limit. Off turns the
+limit off. Auto sets automatic control for the limitation feature. No documentation is available from Daikin on exactly what the auto mode does. A percentage
+between 40 and 100 sets the feature to "on" and the limit to the specified percentage. A value lower than 40% is invalid. Setting to 0 is equivalent to setting
+off. Setting to 1 is equivalent to setting the feature on and restoring the previous limit. </li>
    <li><b>reboot</b>: Reboots the units' wifi module</li>
   </ul>
 
 <p>
 
+ <a id="HVAC_DaikinAC-get"><a>
  <b>Get</b>
   <ul>
     No parameters at this time
@@ -1263,7 +1363,7 @@ attr [devicename] devStateIcon off.*:control_standby@gray on.*cool:frost@blue on
     "Heating",
     "Cooling"
   ],
-  "version": "v1.0.9",
+  "version": "v1.0.10",
   "release_status": "stable",
   "author": [
     "Roel Bouwman (roel@bouwman.net)"
