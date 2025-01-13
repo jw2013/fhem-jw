@@ -95,6 +95,8 @@
 #
 # 2024-12-20    1.0.0.11 - add some patches for better startup (thx to Beta-User)
 #
+# 2025-01-12    1.0.0.12 - add NOTIFYDEV
+#
 ####################################################################################################
 =cut
 
@@ -107,7 +109,7 @@ use vars qw(%defs);
 use vars qw($readingFnAttributes);
 use vars qw(%modules);
 
-my $PID20_Version = "1.0.0.11";
+my $PID20_Version = "1.0.0.12";
 sub PID20_Calc($);
 ########################################
 sub PID20_Log($$$)
@@ -200,6 +202,7 @@ sub PID20_Define($$$)
     return "wrong syntax: define &lt;name&gt; PID20 " 
     . "&lt;sensor&gt;:reading:[regexp] &lt;actor&gt;[:cmd] ";
   }
+  setNotifyDev($hash,'global');
   return if !$init_done;
   return PID20_Check($hash, $a[2], $a[3]);
 }
@@ -223,6 +226,8 @@ sub PID20_Check($$$)
     PID20_Log $hash, 1, $msg;
     #return $msg;
     $err = 1;
+  } else {
+    setNotifyDev($hash,"global,$sensor");
   }
 
   # if reading of sender is unknown
