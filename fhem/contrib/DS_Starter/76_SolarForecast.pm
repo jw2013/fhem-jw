@@ -157,6 +157,10 @@ BEGIN {
 
 # Versions History intern
 my %vNotesIntern = (
+  "1.43.6" => "17.01.2025  _calcCaQcomplex: additional write pvrl, pvfc to separate circular hash Array elements, listDataPool: show these Arrays ",
+  "1.43.5" => "15.01.2025  _flowGraphic: calculate the resulting SoC as a cluster of batteries ",
+  "1.43.4" => "14.01.2025  batsocslidereg: calculate the SoC as summary over all capacities in Wh, bugfix https://forum.fhem.de/index.php?msg=1330559 ",
+  "1.43.3" => "13.01.2025  add Wiki icon in graphic header, _calcConsumptionForecast: switch calc from average to median, edit comref ",
   "1.43.2" => "12.01.2025  _batChargeRecmd: bugfix calc socwh, Attr graphicBeam1MaxVal, (experimental) ctrlAreaFactorUsage are obsolete ".
                            "trackFlex now default in DWD Model, replace title Charging recommendation by Charging release ".
                            "_saveEnergyConsumption: add dowrite flag, edit comref ",
@@ -254,7 +258,7 @@ my %vNotesIntern = (
   "1.33.0" => "26.09.2024  substitute area factor hash by ___areaFactorFix function ",
   "1.32.0" => "02.09.2024  new attr setupOtherProducerXX, report calculation and storage of negative consumption values ".
                            "Forum: https://forum.fhem.de/index.php?msg=1319083 ".
-                           "bugfix in _estConsumptionForecast, new ctrlDebug consumption_long ",
+                           "bugfix in _calcConsumptionForecast, new ctrlDebug consumption_long ",
   "1.31.0" => "20.08.2024  rename attributes ctrlWeatherDevX to setupWeatherDevX ",
   "1.30.0" => "18.08.2024  new attribute flowGraphicShift, Forum:https://forum.fhem.de/index.php?msg=1318597 ",
   "1.29.4" => "03.08.2024  delete writeCacheToFile from _getRoofTopData, _specialActivities: avoid loop caused by \@widgetreadings ",
@@ -486,17 +490,7 @@ my $pPath = '?format=txt';                                                      
 my $cfile = 'controls_solarforecast.txt';                                           # Name des Controlfiles
 
 
-# initiale Hashes für Stunden Consumption Forecast inkl. und exkl. Verbraucher
-my $conhfc = { "01" => 0, "02" => 0, "03" => 0, "04" => 0, "05" => 0, "06" => 0, "07" => 0, "08" => 0,
-               "09" => 0, "10" => 0, "11" => 0, "12" => 0, "13" => 0, "14" => 0, "15" => 0, "16" => 0,
-               "17" => 0, "18" => 0, "19" => 0, "20" => 0, "21" => 0, "22" => 0, "23" => 0, "24" => 0,
-             };
-
-my $conhfcex = { "01" => 0, "02" => 0, "03" => 0, "04" => 0, "05" => 0, "06" => 0, "07" => 0, "08" => 0,
-                 "09" => 0, "10" => 0, "11" => 0, "12" => 0, "13" => 0, "14" => 0, "15" => 0, "16" => 0,
-                 "17" => 0, "18" => 0, "19" => 0, "20" => 0, "21" => 0, "22" => 0, "23" => 0, "24" => 0,
-               };
-                                                                                  # mögliche Debug-Module
+                                                                                    # mögliche Debug-Module
 my @dd = qw( aiProcess
              aiData
              apiCall
@@ -942,6 +936,8 @@ my %htitles = (                                                                 
                 DE => qq{Konfigurationspr&#252;fung der Anlage}                                                    },
   jtsfft   => { EN => qq{Open the SolarForecast Forum},
                 DE => qq{&#214;ffne das SolarForecast Forum}                                                       },
+  opwiki   => { EN => qq{Open the Wiki (German language)},
+                DE => qq{&#214;ffne das Wiki}                                                                      },
   scaresps => { EN => qq{API request successful},
                 DE => qq{API Abfrage erfolgreich}                                                                  },
   dwfcrsu  => { EN => qq{Weather data are up to date according to used DWD model},
@@ -7098,9 +7094,8 @@ sub writeCacheToFile {
       return ('', $nr, $na);
   }
   
-  my @arr;
   return if(!keys %{$data{$name}{$cachename}});
-  push @arr, encode_json ($data{$name}{$cachename});
+  push my @arr, encode_json ($data{$name}{$cachename});
 
   $error = FileWrite ($file, @arr);
 
@@ -7555,7 +7550,7 @@ sub centralTask {
   _batSocTarget               ($centpars);                                            # Batterie Optimum Ziel SOC berechnen
   _batChargeRecmd             ($centpars);                                            # Batterie Ladefreigabe berechnen und erstellen
   _manageConsumerData         ($centpars);                                            # Consumer Daten sammeln und Zeiten planen
-  _estConsumptionForecast     ($centpars);                                            # Verbrauchsprognose erstellen
+  _calcConsumptionForecast    ($centpars);                                            # Verbrauchsprognose erstellen
   _evaluateThresholds         ($centpars);                                            # Schwellenwerte bewerten und signalisieren
   _calcReadingsTomorrowPVFc   ($centpars);                                            # zusätzliche Readings Tomorrow_HourXX_PVforecast berechnen
   _calcTodayPVdeviation       ($centpars);                                            # Vorhersageabweichung erstellen (nach Sonnenuntergang)
@@ -8752,7 +8747,7 @@ sub _transferAPIRadiationValues {
       my $est            = __calcPVestimates ($paref);
       my ($msg, $pvaifc) = aiGetResult ($paref);                                              # KI Entscheidungen abfragen
 
-      $data{$name}{nexthours}{$nhtstr}{pvapifc} = $est;                                    # durch API gelieferte PV Forecast
+      $data{$name}{nexthours}{$nhtstr}{pvapifc} = $est;                                       # durch API gelieferte PV Forecast
 
       delete $paref->{fd};
       delete $paref->{fh1};
@@ -9430,6 +9425,7 @@ sub _transferBatteryValues {
   my $pbosum  = 0;
   my $bcapsum = 0;
   my $socsum;
+  my $socwhsum;
   
   delete $data{$name}{current}{batpowerinsum};       
   delete $data{$name}{current}{batpoweroutsum}; 
@@ -9440,8 +9436,6 @@ sub _transferBatteryValues {
   
       my ($err, $badev, $h) = isDeviceValid ( { name => $name, obj => 'setupBatteryDev'.$bn, method => 'attr' } );
       next if($err);
-
-      $num++;
 
       my ($pin,$piunit)    = split ":", $h->{pin};                                                # Readingname/Unit für aktuelle Batterieladung
       my ($pou,$pounit)    = split ":", $h->{pout};                                               # Readingname/Unit für aktuelle Batterieentladung
@@ -9578,24 +9572,29 @@ sub _transferBatteryValues {
       storeReading ('Current_PowerBatOut_'.$bn, $pbo.' W');
       storeReading ('Current_BatCharge_'.  $bn, $soc.' %');
       
-      $data{$name}{batteries}{$bn}{bname}        = $badev;                                  # Batterie Devicename            
-      $data{$name}{batteries}{$bn}{balias}       = AttrVal ($badev, 'alias', $badev);       # Alias Batterie Device
-      $data{$name}{batteries}{$bn}{bpowerin}     = $pbi;                                    # momentane Batterieladung
-      $data{$name}{batteries}{$bn}{bpowerout}    = $pbo;                                    # momentane Batterieentladung
-      $data{$name}{batteries}{$bn}{bcharge}      = $soc;                                    # aktuelle Batterieladung
-      $data{$name}{batteries}{$bn}{basynchron}   = $h->{asynchron} // 0;                    # asynchroner Modus = X
-      $data{$name}{batteries}{$bn}{bicon}        = $h->{icon} if($h->{icon});               # Batterie Icon
-      $data{$name}{batteries}{$bn}{bshowingraph} = $h->{show} // 0;                         # Batterie in Balkengrafik anzeigen 
+      $data{$name}{batteries}{$bn}{bname}        = $badev;                                               # Batterie Devicename            
+      $data{$name}{batteries}{$bn}{balias}       = AttrVal ($badev, 'alias', $badev);                    # Alias Batterie Device
+      $data{$name}{batteries}{$bn}{bpowerin}     = $pbi;                                                 # momentane Batterieladung
+      $data{$name}{batteries}{$bn}{bpowerout}    = $pbo;                                                 # momentane Batterieentladung
+      $data{$name}{batteries}{$bn}{bcharge}      = $soc;                                                 # Batterie SoC (%)
+      $data{$name}{batteries}{$bn}{basynchron}   = $h->{asynchron} // 0;                                 # asynchroner Modus = X
+      $data{$name}{batteries}{$bn}{bicon}        = $h->{icon} if($h->{icon});                            # Batterie Icon
+      $data{$name}{batteries}{$bn}{bshowingraph} = $h->{show} // 0;                                      # Batterie in Balkengrafik anzeigen
+      $data{$name}{batteries}{$bn}{bchargewh}    = BatteryVal ($name, $bn, 'binstcap', 0) * $soc / 100;  # Batterie SoC (Wh)     
       
       writeToHistory ( { paref => $paref, key => 'batsoc'.$bn, val => $soc, hour => $nhour } );  
       
-      $socsum += $soc;
+      $num++;
+      $socsum   += $soc;
+      $socwhsum += BatteryVal ($name, $bn, 'binstcap', 0) * $soc / 100;                    # Batterie SoC in Wh
+      
       $pbisum += $pbi;
       $pbosum += $pbo;
   }
     
   if ($num) {
-      push @{$data{$name}{current}{batsocslidereg}}, $socsum / $num;                       # Schieberegister average SOC aller Batterien
+      my $soctotal = sprintf "%.0f", ($socwhsum / $bcapsum * 100) if($bcapsum);            # resultierender SoC (%) aller Batterien als "eine" 
+      push @{$data{$name}{current}{batsocslidereg}}, $soctotal;                            # Schieberegister average SOC aller Batterien
       limitArray ($data{$name}{current}{batsocslidereg}, $slidenummax);
   
       $data{$name}{current}{batpowerinsum}  = $pbisum;                                     # summarische laufende Batterieladung
@@ -11812,7 +11811,7 @@ return ($simpCstat, $starttime, $stoptime, $supplmnt);
 ################################################################
 #     Energieverbrauch Vorhersage kalkulieren
 ################################################################
-sub _estConsumptionForecast {
+sub _calcConsumptionForecast {
   my $paref   = shift;
   my $name    = $paref->{name};
   my $type    = $paref->{type};
@@ -11840,10 +11839,7 @@ sub _estConsumptionForecast {
   ## Verbrauchsvorhersage für den kommenden Tag
   ##############################################
   my $tomorrow = strftime "%a", localtime($t+86400);                                                    # Wochentagsname kommender Tag
-  my $totcon   = 0;
-  my $dnum     = 0;
-  
-  my ($exconfc, $csme);
+  my (@cona, $exconfc, $csme);
 
   debugLog ($paref, 'consumption|consumption_long', "################### Consumption forecast for the next day ###################");
   debugLog ($paref, 'consumption|consumption_long', "Date(s) to take note: ".join ',', @dtn) if(@dtn);
@@ -11882,15 +11878,16 @@ sub _estConsumptionForecast {
 
       debugLog ($paref, 'consumption|consumption_long', "History Consumption day >$n< considering possible exclusions: $dcon");
 
-      $totcon += $dcon;
-      $dnum++;
+      push @cona, $dcon;
   }
 
+  my $dnum = scalar @cona;
+  
   if ($dnum) {
-       my $tomavg                                        = int ($totcon / $dnum);
-       $data{$name}{current}{tomorrowconsumption} = $tomavg;                                      # prognostizierter Durchschnittsverbrauch aller (gleicher) Wochentage
+       my $tomcon                                 = sprintf "%.0f", medianArray (\@cona);
+       $data{$name}{current}{tomorrowconsumption} = $tomcon;                                           # prognostizierter Verbrauch (Median) aller (gleicher) Wochentage
 
-       debugLog ($paref, 'consumption|consumption_long', "estimated Consumption for tomorrow: $tomavg, days for avg: $dnum");
+       debugLog ($paref, 'consumption|consumption_long', "estimated Consumption for tomorrow: $tomcon, days for avg: $dnum");
   }
   else {
       my $lang = $paref->{lang};
@@ -11906,22 +11903,14 @@ sub _estConsumptionForecast {
       my $nhtime = NexthoursVal ($hash, $k, "starttime", undef);                                    # Startzeit
       next if(!$nhtime);
 
-      $conhfc = { "01" => 0, "02" => 0, "03" => 0, "04" => 0, "05" => 0, "06" => 0, "07" => 0, "08" => 0,
-                  "09" => 0, "10" => 0, "11" => 0, "12" => 0, "13" => 0, "14" => 0, "15" => 0, "16" => 0,
-                  "17" => 0, "18" => 0, "19" => 0, "20" => 0, "21" => 0, "22" => 0, "23" => 0, "24" => 0,
-                };
-
-      $conhfcex = { "01" => 0, "02" => 0, "03" => 0, "04" => 0, "05" => 0, "06" => 0, "07" => 0, "08" => 0,
-                    "09" => 0, "10" => 0, "11" => 0, "12" => 0, "13" => 0, "14" => 0, "15" => 0, "16" => 0,
-                    "17" => 0, "18" => 0, "19" => 0, "20" => 0, "21" => 0, "22" => 0, "23" => 0, "24" => 0,
-                  };
-
       $dnum          = 0;
       my $consumerco = 0;
       my $utime      = timestringToTimestamp ($nhtime);
       my $nhday      = strftime "%a", localtime($utime);                                            # Wochentagsname des NextHours Key
       my $nhhr       = sprintf("%02d", (int (strftime "%H", localtime($utime))) + 1);               # Stunde des Tages vom NextHours Key  (01,02,...24)
 
+      my (@conhfc, @conhfcex);
+      
       for my $m (sort{$a<=>$b} keys %{$data{$name}{pvhist}}) {
           next if($m eq $day);                                                                      # next wenn gleicher Tag (Datum) wie heute
 
@@ -11966,18 +11955,19 @@ sub _estConsumptionForecast {
               }
           }
 
-          $conhfcex->{$nhhr} += ($hcon - $consumerco) if($hcon >= $consumerco);                     # prognostizierter Verbrauch Ex registrierter Verbraucher
-          $conhfc->{$nhhr}   += $hcon;
+          push @conhfcex, ($hcon - $consumerco) if($hcon >= $consumerco);                                               # prognostizierter Verbrauch (Median) Ex registrierter Verbraucher
+          push @conhfc,   $hcon;
+          
           $dnum++;
       }
 
       if ($dnum) {
-           my $conavgex                            = int ($conhfcex->{$nhhr} / $dnum);
+           my $conavgex                         = sprintf "%.0f", medianArray (\@conhfcex) if(scalar @conhfcex);
            $data{$name}{nexthours}{$k}{confcEx} = $conavgex;
-           my $conavg                              = int ($conhfc->{$nhhr}   / $dnum);
-           $data{$name}{nexthours}{$k}{confc}   = $conavg;                                       # Durchschnittsverbrauch aller gleicher Wochentage pro Stunde
+           my $conavg                           = sprintf "%.0f", medianArray (\@conhfc)   if(scalar @conhfc);
+           $data{$name}{nexthours}{$k}{confc}   = $conavg;                                                              # prognostizierter Verbrauch (Median) auf Grundlage aller gleicher Wochentage pro Stunde
 
-           if (NexthoursVal ($hash, $k, 'today', 0)) {                                              # nur Werte des aktuellen Tag speichern
+           if (NexthoursVal ($hash, $k, 'today', 0)) {                                                                  # nur Werte des aktuellen Tag speichern
                $data{$name}{circular}{sprintf("%02d",$nhhr)}{confc} = $conavg;
                writeToHistory ( { paref => $paref, key => 'confc', val => $conavg, hour => $nhhr } );
            }
@@ -12235,20 +12225,28 @@ sub _calcCaQcomplex {
       debugLog     ($paref, 'pvCorrectionWrite', "Autolearning is switched off for hour: $h -> skip the recalculation of the complex correction factor");
       return;
   }
-
-  my $pvrl  = CircularVal ($hash, sprintf("%02d",$h), 'pvrl',    0);
-  my $pvfc  = CircularVal ($hash, sprintf("%02d",$h), 'pvapifc', 0);
+  
+  my $hh    = sprintf "%02d", $h;
+  my $pvrl  = CircularVal ($hash, $hh, 'pvrl',    0);                                  # real erzeugte PV Energie am Ende der vorherigen Stunde
+  my $pvfc  = CircularVal ($hash, $hh, 'pvapifc', 0);                                  # vorhergesagte PV Energie am Ende der vorherigen Stunde
 
   if (!$pvrl || !$pvfc) {
-      storeReading ('.pvCorrectionFactor_'.sprintf("%02d",$h).'_cloudcover', 'done');
+      storeReading ('.pvCorrectionFactor_'.$hh.'_cloudcover', 'done');
       return;
   }
 
-  my $chwcc  = HistoryVal ($hash, $day, sprintf("%02d",$h), 'wcc',    0);                            # Wolkenbedeckung Heute & abgefragte Stunde
-  my $sunalt = HistoryVal ($hash, $day, sprintf("%02d",$h), 'sunalt', 0);                            # Sonne Altitude
+  my $chwcc  = HistoryVal ($hash, $day, $hh, 'wcc',    0);                            # Wolkenbedeckung heute & abgefragte Stunde
+  my $sunalt = HistoryVal ($hash, $day, $hh, 'sunalt', 0);                            # Sonne Altitude
   my $crang  = cloud2bin  ($chwcc);
   my $sabin  = sunalt2bin ($sunalt);
+  
+  ## Speicherarrays schreiben
+  #############################
+  push @{$data{$name}{circular}{$hh}{'pvrl_'.$sabin}{"$crang"}}, $pvrl;
+  push @{$data{$name}{circular}{$hh}{'pvfc_'.$sabin}{"$crang"}}, $pvfc;
 
+  ## neuen Korrekturfaktor berechnen
+  ####################################
   $paref->{pvrl}   = $pvrl;
   $paref->{pvfc}   = $pvfc;
   $paref->{crang}  = $crang;
@@ -12263,16 +12261,16 @@ sub _calcCaQcomplex {
   delete $paref->{sabin};
   delete $paref->{calc};
 
-  storeReading ('.pvCorrectionFactor_'.sprintf("%02d",$h).'_cloudcover', 'done');
+  storeReading ('.pvCorrectionFactor_'.$hh.'_cloudcover', 'done');
 
   $aihit = $aihit ? ' AI result used,' : '';
 
   if ($acu =~ /on_complex/xs) {
       if ($paref->{cpcf} !~ /manual/xs) {                                                            # pcf-Reading nur überschreiben wenn nicht 'manual xxx' gesetzt
-          storeReading ('pvCorrectionFactor_'.sprintf("%02d",$h), $factor." (automatic - old factor: $oldfac,$aihit Sun Alt range: $sabin, Cloud range: $crang, Days in range: $dnum)");
+          storeReading ('pvCorrectionFactor_'.$hh, $factor." (automatic - old factor: $oldfac,$aihit Sun Alt range: $sabin, Cloud range: $crang, Days in range: $dnum)");
       }
       else {
-          storeReading ('pvCorrectionFactor_'.sprintf("%02d",$h), $paref->{cpcf}." / flexmatic result $factor for Sun Alt range: $sabin,$aihit Cloud range: $crang, Days in range: $dnum");
+          storeReading ('pvCorrectionFactor_'.$hh, $paref->{cpcf}." / flexmatic result $factor for Sun Alt range: $sabin,$aihit Cloud range: $crang, Days in range: $dnum");
       }
   }
 
@@ -12294,28 +12292,29 @@ sub _calcCaQsimple {
   my $aihit = $paref->{aihit};
 
   my $hash = $defs{$name};
-  my $sr   = ReadingsVal ($name, '.pvCorrectionFactor_'.sprintf("%02d",$h).'_apipercentil', '');
+  my $hh   = sprintf "%02d", $h;
+  my $sr   = ReadingsVal ($name, '.pvCorrectionFactor_'.$hh.'_apipercentil', '');
 
   if($sr eq "done") {
-      # debugLog ($paref, 'pvCorrectionWrite', "Simple Corrf factor Hour: ".sprintf("%02d",$h)." already calculated");
+      # debugLog ($paref, 'pvCorrectionWrite', "Simple Corrf factor Hour: ".$hh." already calculated");
       return;
   }
 
   if (!$aln) {
-      storeReading ('.pvCorrectionFactor_'.sprintf("%02d",$h).'_apipercentil', 'done');
+      storeReading ('.pvCorrectionFactor_'.$hh.'_apipercentil', 'done');
       debugLog     ($paref, 'pvCorrectionWrite', "Autolearning is switched off for hour: $h -> skip the recalculation of the simple correction factor");
       return;
   }
 
-  my $pvrl = CircularVal ($hash, sprintf("%02d",$h), 'pvrl',    0);
-  my $pvfc = CircularVal ($hash, sprintf("%02d",$h), 'pvapifc', 0);
+  my $pvrl = CircularVal ($hash, $hh, 'pvrl',    0);
+  my $pvfc = CircularVal ($hash, $hh, 'pvapifc', 0);
 
   if (!$pvrl || !$pvfc) {
-      storeReading ('.pvCorrectionFactor_'.sprintf("%02d",$h).'_apipercentil', 'done');
+      storeReading ('.pvCorrectionFactor_'.$hh.'_apipercentil', 'done');
       return;
   }
 
-  my $sunalt = HistoryVal ($hash, $day, sprintf("%02d",$h), 'sunalt', 0);                            # Sonne Altitude
+  my $sunalt = HistoryVal ($hash, $day, $hh, 'sunalt', 0);                            # Sonne Altitude
   my $sabin  = sunalt2bin ($sunalt);
 
   $paref->{pvrl}  = $pvrl;
@@ -12332,16 +12331,16 @@ sub _calcCaQsimple {
   delete $paref->{crang};
   delete $paref->{calc};
 
-  storeReading ('.pvCorrectionFactor_'.sprintf("%02d",$h).'_apipercentil', 'done');
+  storeReading ('.pvCorrectionFactor_'.$hh.'_apipercentil', 'done');
 
   $aihit = $aihit ? ' AI result used,' : '';
 
   if ($acu =~ /on_simple/xs) {
       if ($paref->{cpcf} !~ /manual/xs) {                                                            # pcf-Reading nur überschreiben wenn nicht 'manual xxx' gesetzt
-          storeReading ('pvCorrectionFactor_'.sprintf("%02d",$h), $factor." (automatic - old factor: $oldfac,$aihit Days in range: $dnum)");
+          storeReading ('pvCorrectionFactor_'.$hh, $factor." (automatic - old factor: $oldfac,$aihit Days in range: $dnum)");
       }
       else {
-          storeReading ('pvCorrectionFactor_'.sprintf("%02d",$h), $paref->{cpcf}." / flexmatic result $factor,$aihit Days in range: $dnum");
+          storeReading ('pvCorrectionFactor_'.$hh, $paref->{cpcf}." / flexmatic result $factor,$aihit Days in range: $dnum");
       }
   }
 
@@ -12369,8 +12368,9 @@ sub __calcNewFactor {
 
   debugLog ($paref, 'pvCorrectionWrite', "$calc Corrf -> Start calculation correction factor for hour: $h");
 
-  my ($oldfac, $oldq)        = CircularSunCloudkorrVal ($hash, sprintf("%02d",$h), $sabin, $crang, 0);  # bisher definierter Korrekturfaktor / Qualität
-  my ($pvhis, $fchis, $dnum) = CircularSumVal          ($hash, sprintf("%02d",$h), $sabin, $crang, 0);
+  my $hh                     = sprintf "%02d", $h;
+  my ($oldfac, $oldq)        = CircularSunCloudkorrVal ($hash, $hh, $sabin, $crang, 0);  # bisher definierter Korrekturfaktor / Qualität
+  my ($pvhis, $fchis, $dnum) = CircularSumVal          ($hash, $hh, $sabin, $crang, 0);
   $oldfac                    = 1 if(1 * $oldfac == 0);                                            
   
   debugLog ($paref, 'pvCorrectionWrite', "$calc Corrf -> read historical values: pv real sum: $pvhis, pv forecast sum: $fchis, days sum: $dnum");
@@ -12413,23 +12413,44 @@ sub __calcNewFactor {
 
   if ($crang ne 'simple') {
       my $idx = $sabin.'.'.$crang;                                                                    # value für pvcorrf Sonne Altitude
-      $data{$name}{circular}{sprintf("%02d",$h)}{pvrlsum}{$idx} = $pvrlsum;                        # PV Erzeugung Summe speichern
-      $data{$name}{circular}{sprintf("%02d",$h)}{pvfcsum}{$idx} = $pvfcsum;                        # PV Prognose Summe speichern
-      $data{$name}{circular}{sprintf("%02d",$h)}{dnumsum}{$idx} = $dnum;                           # Anzahl aller historischen Tade dieser Range
-      $data{$name}{circular}{sprintf("%02d",$h)}{pvcorrf}{$idx} = $factor;
-      $data{$name}{circular}{sprintf("%02d",$h)}{quality}{$idx} = $qual;
+      $data{$name}{circular}{$hh}{pvrlsum}{$idx} = $pvrlsum;                        # PV Erzeugung Summe speichern
+      $data{$name}{circular}{$hh}{pvfcsum}{$idx} = $pvfcsum;                        # PV Prognose Summe speichern
+      $data{$name}{circular}{$hh}{dnumsum}{$idx} = $dnum;                           # Anzahl aller historischen Tade dieser Range
+      $data{$name}{circular}{$hh}{pvcorrf}{$idx} = $factor;
+      $data{$name}{circular}{$hh}{quality}{$idx} = $qual;
   }
   else {
-      $data{$name}{circular}{sprintf("%02d",$h)}{pvrlsum}{$crang} = $pvrlsum;
-      $data{$name}{circular}{sprintf("%02d",$h)}{pvfcsum}{$crang} = $pvfcsum;
-      $data{$name}{circular}{sprintf("%02d",$h)}{dnumsum}{$crang} = $dnum;
-      $data{$name}{circular}{sprintf("%02d",$h)}{pvcorrf}{$crang} = $factor;
-      $data{$name}{circular}{sprintf("%02d",$h)}{quality}{$crang} = $qual;
+      $data{$name}{circular}{$hh}{pvrlsum}{$crang} = $pvrlsum;
+      $data{$name}{circular}{$hh}{pvfcsum}{$crang} = $pvfcsum;
+      $data{$name}{circular}{$hh}{dnumsum}{$crang} = $dnum;
+      $data{$name}{circular}{$hh}{pvcorrf}{$crang} = $factor;
+      $data{$name}{circular}{$hh}{quality}{$crang} = $qual;
   }
   
   $oldfac = sprintf "%.2f", $oldfac;
   
 return ($oldfac, $factor, $dnum);
+}
+
+################################################################
+#            Qualität der Vorhersage berechnen
+################################################################
+sub __calcFcQuality {
+  my $pvfc = shift;                                                        # PV Vorhersagewert
+  my $pvrl = shift;                                                        # PV reale Erzeugung
+
+  return if(!$pvfc || !$pvrl);
+
+  $pvrl = sprintf "%.0f", $pvrl;
+  $pvfc = sprintf "%.0f", $pvfc;
+
+  my $diff = $pvfc - $pvrl;
+  my $hdv  = 1 - abs ($diff / $pvrl);                                      # Abweichung der Stunde, 1 = bestmöglicher Wert
+
+  $hdv = $hdv < 0 ? 0 : $hdv;
+  $hdv = sprintf "%.2f", $hdv;
+
+return $hdv;
 }
 
 ################################################################
@@ -13283,6 +13304,12 @@ sub _graphicHeader {
       $img         = FW_makeImage('time_note@grey');
       my $fthicon  = "<a href='https://forum.fhem.de/index.php?topic=137058.0' target='_blank'>$img</a>";
       my $fthtitle = $htitles{jtsfft}{$lang};
+      
+      ## Wiki-Icon
+      ##############
+      $img         = FW_makeImage ('edit_copy@grey');
+      my $wikicon  = "<a href='https://wiki.fhem.de/wiki/SolarForecast_-_Solare_Prognose_(PV_Erzeugung)_und_Verbrauchersteuerung' target='_blank'>$img</a>";
+      my $wiktitle = $htitles{opwiki}{$lang};                    
 
       ## Update-Icon
       ################
@@ -13494,13 +13521,14 @@ sub _graphicHeader {
       #######################
       my $alias = AttrVal ($name, "alias", $name );                                               # Linktext als Aliasname
       my $dlink = qq{<a href="$::FW_ME$::FW_subdir?detail=$name">$alias</a>};
-
+      my $space = '&nbsp;&nbsp;&nbsp;';
+      my $disti = qq{<span title="$chktitle"> $chkicon </span> $space <span title="$fthtitle"> $fthicon </span> $space <span title="$wiktitle"> $wikicon </span>};
+      
       $header  .= qq{<tr>};
-      $header  .= qq{<td colspan="1" align="left"                    $dstyle> <b>$dlink</b>              </td>};
-      $header  .= qq{<td colspan="1" align="right" title="$chktitle" $dstyle> $chkicon                   </td>};
-      $header  .= qq{<td colspan="1" align="left"  title="$fthtitle" $dstyle> $fthicon                   </td>};
-      $header  .= qq{<td colspan="3" align="left"                    $dstyle> $lupt $lup &nbsp; $upicon  </td>};
-      $header  .= qq{<td colspan="3" align="right"                   $dstyle> $api                       </td>};
+      $header  .= qq{<td colspan="1" align="left"   $dstyle> <b>$dlink</b>              </td>};
+      $header  .= qq{<td colspan="2" align="center" $dstyle> $disti                     </td>};
+      $header  .= qq{<td colspan="3" align="left"   $dstyle> $lupt $lup &nbsp; $upicon  </td>};
+      $header  .= qq{<td colspan="3" align="right"  $dstyle> $api                       </td>};
       $header  .= qq{</tr>};
       $header  .= qq{<tr>};
       $header  .= qq{<td colspan="3" align="left"  $dstyle> $sriseimg &nbsp; $srisetxt &nbsp;&nbsp;&nbsp; $ssetimg &nbsp; $ssettxt &nbsp;&nbsp;&nbsp; $waicon </td>};
@@ -15200,9 +15228,12 @@ sub _flowGraphic {
   
   ## definierte Batterien ermitteln und zusammenfassen
   ######################################################
-  my ($batin, $bat2home, $soc, @batsoc);
-  for my $bn (1..$maxbatteries) {                                              # für jede definierte Batterie
-      $bn = sprintf "%02d", $bn;
+  my ($batin, $bat2home);
+  my $socwhsum = 0;
+  my $soc      = 0;
+  
+  for my $bn (1..$maxbatteries) {                                                   # für jede definierte Batterie
+      $bn                   = sprintf "%02d", $bn;
       my ($err, $badev, $h) = isDeviceValid ( { name => $name, obj => 'setupBatteryDev'.$bn, method => 'attr' } );
       next if($err);
       
@@ -15211,10 +15242,11 @@ sub _flowGraphic {
       $batin         += $batinpow    if(defined $batinpow); 
       $bat2home      += $bat2homepow if(defined $bat2homepow);
       
-      push @batsoc, ReadingsNum ($name, 'Current_BatCharge_'.$bn, 0);
+      $socwhsum      += BatteryVal ($name, $bn, 'bchargewh', 0);                    # Batterie SoC in Wh
   } 
   
-  $soc = avgArray (\@batsoc, scalar @batsoc) if(@batsoc); 
+  my $batcapsum = CurrentVal ($hash, 'batcapsum', 0);                               # Summe installierte Batterie Kapazität
+  $soc          = sprintf "%.0f", ($socwhsum / $batcapsum * 100) if($batcapsum);    # resultierender SoC (%) aller Batterien als Cluster
   
   if (!defined $batin && !defined $bat2home) {
       $hasbat   = 0;
@@ -15459,7 +15491,7 @@ END0
                                             
           $cc_dummy       -= $currentPower;
           $cicon           = FW_makeImage    ($cicon, '');
-          ($scale, $cicon) = __normIconScale ($cicon, $name);
+          ($scale, $cicon) = __normIconScale ($name, $cicon);
           
           $ret .= qq{<g id="consumer_${c}_$stna" transform="translate($cons_left,$y_pos),scale($scale)">};
           $ret .= "<title>$calias</title>".$cicon;
@@ -15488,7 +15520,7 @@ END1
   ## Home Icon
   ##############
   my $hicon        = FW_makeImage    ($homeicondef, '');
-  ($scale, $hicon) = __normIconScale ($hicon, $name);
+  ($scale, $hicon) = __normIconScale ($name, $hicon);
   
   $ret .= qq{<g id="home_$stna" transform="translate(368,360),scale($scale)">};                   # translate(X-Koordinate,Y-Koordinate), scale(<Größe>)-> Koordinaten ändern sich bei Größenänderung           
   $ret .= "<title>Home</title>".$hicon;
@@ -15500,7 +15532,7 @@ END1
       my $dumtxt       = $htitles{dumtxt}{$lang};  
       my $dumcol       = $cc_dummy <= 0 ? '@grey' : q{};                                          # Einfärbung Consumer Dummy
       my $dicon        = FW_makeImage    ($cicondef.$dumcol, '');
-      ($scale, $dicon) = __normIconScale ($dicon, $name);
+      ($scale, $dicon) = __normIconScale ($name, $dicon);
       
       $ret .= qq{<g id="dummy_$stna" transform="translate(660,360),scale($scale)">};
       $ret .= "<title>$dumtxt</title>".$dicon;
@@ -15810,7 +15842,7 @@ sub __addProducerIcon {
                                                 );
 
           $picon           = FW_makeImage    ($picon, '');
-          ($scale, $picon) = __normIconScale ($picon, $name);
+          ($scale, $picon) = __normIconScale ($name, $picon);
           
           $ret .= qq{<g id="producer_${pn}_$stna" fill="grey" transform="translate($left,$y_coord),scale($scale)">};
           $ret .= "<title>$ptxt</title>".$picon;
@@ -15847,7 +15879,7 @@ sub __addNodeIcon {
                                          );
   
   $nicon           = FW_makeImage    ($nicon, '');
-  ($scale, $nicon) = __normIconScale ($nicon, $name);
+  ($scale, $nicon) = __normIconScale ($name, $nicon);
   
   my $ret = qq{<g id="node_$stna" transform="translate($x_coord,$y_coord),scale($scale)">};     # translate(X-Koordinate,Y-Koordinate), scale(<Größe>)-> Koordinaten ändern sich bei Größenänderung           
   $ret   .= "<title>$ntxt</title>".$nicon;
@@ -16034,8 +16066,9 @@ return $p;
 #    scale:   0.10   Normativ $fgscaledef
 ################################################################
 sub __normIconScale {
-  my $icon = shift;
   my $name = shift;
+  my $icon = shift;
+  my $dim  = shift // 470;                                                     # Dimension
   
   my $hscale           = $fgscaledef;                                          # Scale Normativ
   my $wscale           = $fgscaledef;
@@ -16044,27 +16077,27 @@ sub __normIconScale {
   
   return ($hscale, $icon) if(!$width || !$height);
   
-  $wscale = $hunit eq 'pt' ? 470 * $wscale / $width             :
-            $hunit eq 'px' ? 470 * $wscale / $width * 0.96      :
-            $hunit eq 'in' ? 470 * $wscale / $width * 0.0138889 :
-            $hunit eq 'mm' ? 470 * $wscale / $width * 0.352778  :
-            $hunit eq 'cm' ? 470 * $wscale / $width * 0.0352778 :
-            $hunit eq 'pc' ? 470 * $wscale / $width * 0.0833333 :
+  $wscale = $hunit eq 'pt' ? $dim * $wscale / $width             :
+            $hunit eq 'px' ? $dim * $wscale / $width * 0.96      :
+            $hunit eq 'in' ? $dim * $wscale / $width * 0.0138889 :
+            $hunit eq 'mm' ? $dim * $wscale / $width * 0.352778  :
+            $hunit eq 'cm' ? $dim * $wscale / $width * 0.0352778 :
+            $hunit eq 'pc' ? $dim * $wscale / $width * 0.0833333 :
             $wscale;
             
-  $hscale = $hunit eq 'pt' ? 470 * $hscale / $height             :
-            $hunit eq 'px' ? 470 * $hscale / $height * 0.96      :
-            $hunit eq 'in' ? 470 * $hscale / $height * 0.0138889 :
-            $hunit eq 'mm' ? 470 * $hscale / $height * 0.352778  :
-            $hunit eq 'cm' ? 470 * $hscale / $height * 0.0352778 :
-            $hunit eq 'pc' ? 470 * $hscale / $height * 0.0833333 :
+  $hscale = $hunit eq 'pt' ? $dim * $hscale / $height             :
+            $hunit eq 'px' ? $dim * $hscale / $height * 0.96      :
+            $hunit eq 'in' ? $dim * $hscale / $height * 0.0138889 :
+            $hunit eq 'mm' ? $dim * $hscale / $height * 0.352778  :
+            $hunit eq 'cm' ? $dim * $hscale / $height * 0.0352778 :
+            $hunit eq 'pc' ? $dim * $hscale / $height * 0.0833333 :
             $hscale;
            
   $wscale = sprintf "%.2f", $wscale;
   $hscale = sprintf "%.2f", $hscale;
   
-  my $widthnormpt  = (sprintf "%.0f", (470 * (1 + $wscale))).'pt';          # Breite auf Normativ in pt skaliert          
-  my $heightnormpt = (sprintf "%.0f", (470 * (1 + $hscale))).'pt';          # Höhe auf Normativ in pt skaliert
+  my $widthnormpt  = (sprintf "%.0f", ($dim * (1 + $wscale))).'pt';          # Breite auf Normativ in pt skaliert          
+  my $heightnormpt = (sprintf "%.0f", ($dim * (1 + $hscale))).'pt';          # Höhe auf Normativ in pt skaliert
   
   $icon =~ s/width="(.*?)"/width="$widthnormpt"/;
   $icon =~ s/height="(.*?)"/height="$heightnormpt"/;
@@ -16248,27 +16281,6 @@ sub _addHourAiRawdata {
   storeReading ('.signaldone_'.sprintf("%02d",$h), 'done');
 
 return;
-}
-
-################################################################
-#            Qualität der Vorhersage berechnen
-################################################################
-sub __calcFcQuality {
-  my $pvfc = shift;                                                        # PV Vorhersagewert
-  my $pvrl = shift;                                                        # PV reale Erzeugung
-
-  return if(!$pvfc || !$pvrl);
-
-  $pvrl = sprintf "%.0f", $pvrl;
-  $pvfc = sprintf "%.0f", $pvfc;
-
-  my $diff = $pvfc - $pvrl;
-  my $hdv  = 1 - abs ($diff / $pvrl);                                      # Abweichung der Stunde, 1 = bestmöglicher Wert
-
-  $hdv = $hdv < 0 ? 0 : $hdv;
-  $hdv = sprintf "%.2f", $hdv;
-
-return $hdv;
 }
 
 ###############################################################
@@ -17110,14 +17122,6 @@ sub listDataPool {
 
   my $sub = sub {
       my $day = shift;
-
-      #for my $dh (keys %{$h->{$day}}) {
-      #    if (!isNumeric ($dh)) {
-      #        delete $data{$name}{pvhist}{$day}{$dh};
-      #        Log3 ($name, 2, qq{$name - INFO - invalid key "$day -> $dh" was deleted from pvHistory storage});
-      #    }
-      #}
-
       my $ret;
 
       for my $key (sort {$a<=>$b} keys %{$h->{$day}}) {
@@ -17402,7 +17406,7 @@ sub listDataPool {
           
           for my $ckey (sort keys %{$h->{$idx}}) {
               if (ref $h->{$idx}{$ckey} eq 'ARRAY') {
-                 my $aser = join " ",@{$h->{$idx}{$ckey}};
+                 my $aser = join " ", @{$h->{$idx}{$ckey}};
                  $cret .= ($s1 ? $sp1 : "").$ckey." => ".$aser."\n";
               }
               
@@ -17429,6 +17433,35 @@ sub listDataPool {
       if (!keys %{$h}) {
           return qq{Circular cache is empty.};
       }
+ 
+  ### nicht mehr benötigte Daten verarbeiten - Bereich kann später wieder raus !!
+  ##########################################################################################################################
+    delete $data{$name}{circular}{'01'}{pvrl_5};
+    delete $data{$name}{circular}{'01'}{pvrl_10};
+    delete $data{$name}{circular}{'01'}{pvrl_25};
+    delete $data{$name}{circular}{'01'}{pvrl_60};
+    delete $data{$name}{circular}{'01'}{pvrl_65};
+    delete $data{$name}{circular}{'01'}{pvrl_90};
+
+    #push @{$data{$name}{circular}{'01'}{pvrl_65}{100}}, 4561;
+    #push @{$data{$name}{circular}{'01'}{pvrl_65}{100}}, 4562;
+    #push @{$data{$name}{circular}{'01'}{pvrl_65}{100}}, 4563;
+    #push @{$data{$name}{circular}{'01'}{pvrl_65}{100}}, 4564;
+    #push @{$data{$name}{circular}{'01'}{pvrl_65}{100}}, 4565;
+    #
+    #push @{$data{$name}{circular}{'01'}{pvrl_65}{60}}, 3561;
+    #push @{$data{$name}{circular}{'01'}{pvrl_65}{60}}, 3562;
+    #
+    #push @{$data{$name}{circular}{'01'}{pvrl_90}{100}}, 4561;
+    #push @{$data{$name}{circular}{'01'}{pvrl_90}{100}}, 4562;
+    #push @{$data{$name}{circular}{'01'}{pvrl_90}{100}}, 4563;
+    #push @{$data{$name}{circular}{'01'}{pvrl_90}{100}}, 4564;
+    #push @{$data{$name}{circular}{'01'}{pvrl_90}{100}}, 4565;
+
+    #push @{$data{$name}{circular}{'01'}{pvrl_90}{60}}, 3561;
+    #push @{$data{$name}{circular}{'01'}{pvrl_90}{60}}, 3562;
+
+############################################################################################################
 
       for my $idx (sort keys %{$h}) {
           my $pvrl     = CircularVal ($hash, $idx, 'pvrl',                '-');
@@ -17488,17 +17521,41 @@ sub listDataPool {
                   $bout     .= "batout${bn}: $batout";
               }
               
-              $sq .= $idx." => pvapifc: $pvapifc, pvaifc: $pvaifc, pvfc: $pvfc, aihit: $aihit, pvrl: $pvrl\n";
-              $sq .= "      $bin\n";
-              $sq .= "      $bout\n";
-              $sq .= "      confc: $confc, gcon: $gcons, gfeedin: $gfeedin, wcc: $wccv, rr1c: $rr1c\n";
-              $sq .= "      temp: $temp, wid: $wid, wtxt: $wtxt\n";
-              $sq .= "      $prdl\n";
-              $sq .= "      pvcorrf: $pvcf\n";
-              $sq .= "      quality: $cfq\n";
-              $sq .= "      pvrlsum: $pvrs\n";
-              $sq .= "      pvfcsum: $pvfs\n";
-              $sq .= "      dnumsum: $dnus";
+                my ($pvrlnew, $pvfcnew);
+                my @pvrlkeys = map { $_ =~ /^pvrl_/xs ? $_ : '' } sort keys %{$h->{$idx}}; 
+                my @pvfckeys = map { $_ =~ /^pvfc_/xs ? $_ : '' } sort keys %{$h->{$idx}};                  
+
+                for my $prl (@pvrlkeys) {
+                    next if(!$prl);
+                    my $lref = CircularVal ($hash, $idx, $prl, ''); 
+                    next if(!$lref);                  
+                    
+                    $pvrlnew .= "\n      " if($pvrlnew);
+                    $pvrlnew .= _ldchash2val ( { pool => $h, idx => $idx, key => $prl, cval => $lref } );
+                }
+                
+                for my $pfc (@pvfckeys) {
+                    next if(!$pfc);
+                    my $cref = CircularVal ($hash, $idx, $pfc, ''); 
+                    next if(!$cref);                  
+                    
+                    $pvfcnew .= "\n      " if($pvfcnew);
+                    $pvfcnew .= _ldchash2val ( { pool => $h, idx => $idx, key => $pfc, cval => $cref } );
+                }
+              
+              $sq .= $idx." => pvapifc: $pvapifc, pvaifc: $pvaifc, pvfc: $pvfc, aihit: $aihit, pvrl: $pvrl";
+              $sq .= "\n      $bin";
+              $sq .= "\n      $bout";
+              $sq .= "\n      confc: $confc, gcon: $gcons, gfeedin: $gfeedin, wcc: $wccv, rr1c: $rr1c";
+              $sq .= "\n      temp: $temp, wid: $wid, wtxt: $wtxt";
+              $sq .= "\n      $prdl";
+              $sq .= "\n      pvcorrf: $pvcf";
+              $sq .= "\n      quality: $cfq";
+              $sq .= "\n      pvrlsum: $pvrs";
+              $sq .= "\n      pvfcsum: $pvfs";
+              $sq .= "\n      dnumsum: $dnus";
+              $sq .= "\n      $pvrlnew" if($pvrlnew);
+              $sq .= "\n      $pvfcnew" if($pvfcnew);
           }
           else {
               my ($batvl1, $batvl2, $batvl3, $batvl4, $batvl5, $batvl6, $batvl7);
@@ -17770,7 +17827,24 @@ sub _ldchash2val {
 
       for my $f (sort {$a<=>$b} keys %{$pool->{$idx}{$key}}) {
           next if($f eq 'simple');
-          if ($f !~ /\./xs) {
+          
+          if (ref $pool->{$idx}{$key}{$f} eq 'ARRAY') {
+              my @sub_arrays = arraySplitBy (20, @{$pool->{$idx}{$key}{$f}});              # Array in Teil-Arrays zu je 20 Elemente aufteilen
+              
+              for my $suaref (@sub_arrays) {                                               # für jedes Teil-Array Join ausführen
+                  my $suajoined = join ' ', @{$suaref};
+                  
+                  if (!$ret) {
+                      $ret .= $key.' => ';
+                      $ret .= $f.' @ '.$suajoined;   
+                  }
+                  else {
+                      $ret .= "\n                 ";
+                      $ret .= $f.' @ '.$suajoined;
+                  }
+              }
+          }
+          elsif ($f !~ /\./xs) {
               $ret .= " " if($ret);
               $ret .= "$f=".$pool->{$idx}{$key}{$f};
               my $ct = ($ret =~ tr/=// // 0) / 10;
@@ -20218,6 +20292,48 @@ return $bin;
 }
 
 ###############################################################################
+#   Teilt das Original-Array in Unter-Arrays auf, die den Inhalt des 
+#   Originals enthalten. Die Größe jedes Unterarrays ist gleich oder kleiner als 
+#   $split_size, wobei das letzte Array in der Regel kleiner ist, wenn nicht 
+#   genügend Elemente in @original vorhanden sind.
+#   (aus https://metacpan.org/dist/Array-Split/source/lib/Array/Split.pm)
+#
+#   arraySplitBy ($split_size, @original)
+###############################################################################
+sub arraySplitBy {
+  my $split_size = shift;
+    
+  $split_size = max ($split_size, 1);
+  my @sub_arrays;
+    
+  while (@_) {
+      push @sub_arrays, [splice @_, 0, $split_size];
+  }
+    
+return @sub_arrays;
+}
+  
+###############################################################################
+#   Teilt das angegebene Array in die Anzahl $count Unterarrays auf. 
+#   Es wird versucht, so viele Unter-Arrays zu erstellen, wie $count angibt, 
+#   aber es werden weniger zurückgegeben, wenn nicht genügend Elemente in 
+#   @original vorhanden sind.
+#
+#   Gibt eine Liste von Array-Referenzen zurück.
+#   (aus https://metacpan.org/dist/Array-Split/source/lib/Array/Split.pm)
+#
+#   arraySplitInto ($count, @original)
+###############################################################################
+sub arraySplitInto {                     
+  my ($count, @original) = @_;
+    
+  $count   = max( $count, 1 );
+  my $size = ceil @original / $count;
+    
+return arraySplitBy ($size, @original);
+}
+
+###############################################################################
 #                    verscrambelt einen String
 ###############################################################################
 sub chew {
@@ -21229,7 +21345,8 @@ to ensure that the system configuration is correct.
       <li><b>batteryTrigger &lt;1on&gt;=&lt;Value&gt; &lt;1off&gt;=&lt;Value&gt; [&lt;2on&gt;=&lt;Value&gt; &lt;2off&gt;=&lt;Value&gt; ...] </b> <br><br>
 
       Generates triggers when the battery charge exceeds or falls below certain values (SoC in %). <br>
-      The SoC used is formed as an average of the SoC of all defined battery devices. <br>
+      The SoC used is formed as the resulting SoC (sum of the current charge of all battery devices in relation to the total installed 
+      total capacity), i.e. all batteries are considered as one cluster. <br>
       If the last three SoC measurements exceed a defined <b>Xon-Bedingung</b>, the reading <b>batteryTrigger_X = on</b>
       is created/set. <br>
       If the last three SoC measurements fall below a defined <b>Xoff-Bedingung</b>, the reading
@@ -21975,13 +22092,14 @@ to ensure that the system configuration is correct.
       <ul>
          <table>
          <colgroup> <col width="25%"> <col width="75%"> </colgroup>
-            <tr><td> <b>bname </b>          </td><td>Name of the device                                                           </td></tr>
-            <tr><td> <b>balias </b>         </td><td>Alias of the device                                                          </td></tr>
-            <tr><td> <b>basynchron </b>     </td><td>Mode of processing received battery events                                   </td></tr>
-            <tr><td> <b>bcharge </b>        </td><td>SOC (State of Charge) of the battery (%)                                     </td></tr>
-            <tr><td> <b>binstcap </b>       </td><td>installed battery capacity (Wh)                                              </td></tr>
-            <tr><td> <b>bpowerin </b>       </td><td>current charging power (W)                                                   </td></tr>
-            <tr><td> <b>bpowerout </b>      </td><td>current discharge power (W)                                                  </td></tr>
+            <tr><td> <b>bname </b>          </td><td>Name of the device                                     </td></tr>
+            <tr><td> <b>balias </b>         </td><td>Alias of the device                                    </td></tr>
+            <tr><td> <b>basynchron </b>     </td><td>Mode of processing received battery events             </td></tr>
+            <tr><td> <b>bcharge </b>        </td><td>current SoC (State of Charge) of the battery (%)       </td></tr>
+            <tr><td> <b>bchargewh </b>      </td><td>current SoC (State of Charge) of the battery (Wh)      </td></tr>
+            <tr><td> <b>binstcap </b>       </td><td>installed battery capacity (Wh)                        </td></tr>
+            <tr><td> <b>bpowerin </b>       </td><td>current charging power (W)                             </td></tr>
+            <tr><td> <b>bpowerout </b>      </td><td>current discharge power (W)                            </td></tr>
 		 </table>
       </ul>
 
@@ -22417,14 +22535,15 @@ to ensure that the system configuration is correct.
          <ul>
          <table>
          <colgroup> <col width="20%"> <col width="80%"> </colgroup>
-            <tr><td> <b>lowSoc</b>    </td><td>lower minimum SoC, the battery is not discharged lower than this value (> 0)                </td></tr>
-            <tr><td> <b>upSoC</b>     </td><td>upper minimum SoC, the usual value of the optimum SoC is between 'lowSoC'                   </td></tr>
-            <tr><td>                  </td><td>and this value.                                                                             </td></tr>
-            <tr><td> <b>maxSoC</b>    </td><td>Maximum minimum SoC, SoC value that must be reached at least every 'careCycle' days         </td></tr>
-            <tr><td>                  </td><td>in order to balance the charge in the storage network.                                      </td></tr>
-            <tr><td>                  </td><td>The specification is optional (&lt;= 100, default: 95)                                      </td></tr>
-            <tr><td> <b>careCycle</b> </td><td>Maximum interval in days that may occur between two states of charge                        </td></tr>
-            <tr><td>                  </td><td>of at least 'maxSoC'. The specification is optional (default: 20)                           </td></tr>
+            <tr><td> <b>lowSoc</b>    </td><td>lower minimum SoC - The battery is not discharged lower than this value (> 0)                </td></tr>
+            <tr><td> <b>upSoC</b>     </td><td>upper minimum SoC - The usual value of the optimum SoC tends to be                           </td></tr>
+            <tr><td>                  </td><td>between 'lowSoC' and 'upSoC' in periods with a high PV surplus                               </td></tr>
+            <tr><td>                  </td><td>and between 'upSoC' and 'maxSoC' in periods with a low PV surplus                            </td></tr>
+            <tr><td> <b>maxSoC</b>    </td><td>Maximum minimum SoC - SoC value that must be reached at least every 'careCycle' days         </td></tr>
+            <tr><td>                  </td><td>in order to balance the charge in the storage network.                                       </td></tr>
+            <tr><td>                  </td><td>The specification is optional (&lt;= 100, default: 95)                                       </td></tr>
+            <tr><td> <b>careCycle</b> </td><td>Maximum interval in days that may occur between two states of charge                         </td></tr>
+            <tr><td>                  </td><td>of at least 'maxSoC'. The specification is optional (default: 20)                            </td></tr>
          </table>
          </ul>
          <br>
@@ -23689,7 +23808,8 @@ die ordnungsgemäße Anlagenkonfiguration geprüft werden.
       <li><b>batteryTrigger &lt;1on&gt;=&lt;Wert&gt; &lt;1off&gt;=&lt;Wert&gt; [&lt;2on&gt;=&lt;Wert&gt; &lt;2off&gt;=&lt;Wert&gt; ...] </b> <br><br>
 
       Generiert Trigger bei Über- bzw. Unterschreitung bestimmter Batterieladungswerte (SoC in %). <br>
-      Der verwendete SoC wird als Durchschnitt des SoC aller definierten Batterie Geräte gebildet. <br>
+      Der verwendete SoC wird als resultierender SoC (Summe aktuelle Ladung aller Batterie Geräte im Verhältnis zur installierten 
+      Gesamtkapazität) gebildet, d.h. alle Batterien werden als ein Cluster betrachtet. <br>
       Überschreiten die letzten drei SoC-Messungen eine definierte <b>Xon-Bedingung</b>, wird das Reading
       <b>batteryTrigger_X = on</b> erstellt/gesetzt. <br>
       Unterschreiten die letzten drei SoC-Messungen eine definierte <b>Xoff-Bedingung</b>, wird das Reading
@@ -24445,13 +24565,14 @@ die ordnungsgemäße Anlagenkonfiguration geprüft werden.
       <ul>
          <table>
          <colgroup> <col width="25%"> <col width="75%"> </colgroup>
-            <tr><td> <b>bname </b>          </td><td>Name des Gerätes                                                            </td></tr>
-            <tr><td> <b>balias </b>         </td><td>Alias des Gerätes                                                           </td></tr>
-            <tr><td> <b>basynchron </b>     </td><td>Modus der Verarbeitung empfangener Batterie-Events                          </td></tr>
-            <tr><td> <b>bcharge </b>        </td><td>SOC (State of Charge) der Batterie (%)                                      </td></tr>
-            <tr><td> <b>binstcap </b>       </td><td>installierte Batteriekapazität (Wh)                                         </td></tr>
-            <tr><td> <b>bpowerin </b>       </td><td>momentane Ladeleistung (W)                                                  </td></tr>
-            <tr><td> <b>bpowerout </b>      </td><td>momentane Entladeleistung (W)                                               </td></tr>
+            <tr><td> <b>bname </b>          </td><td>Name des Gerätes                                       </td></tr>
+            <tr><td> <b>balias </b>         </td><td>Alias des Gerätes                                      </td></tr>
+            <tr><td> <b>basynchron </b>     </td><td>Modus der Verarbeitung empfangener Batterie-Events     </td></tr>
+            <tr><td> <b>bcharge </b>        </td><td>aktueller SoC (State of Charge) der Batterie (%)       </td></tr>
+            <tr><td> <b>bchargewh </b>      </td><td>aktueller SoC (State of Charge) der Batterie (Wh)      </td></tr>
+            <tr><td> <b>binstcap </b>       </td><td>installierte Batteriekapazität (Wh)                    </td></tr>
+            <tr><td> <b>bpowerin </b>       </td><td>momentane Ladeleistung (W)                             </td></tr>
+            <tr><td> <b>bpowerout </b>      </td><td>momentane Entladeleistung (W)                          </td></tr>
 		 </table>
       </ul>
 
@@ -24885,14 +25006,15 @@ die ordnungsgemäße Anlagenkonfiguration geprüft werden.
          <ul>
          <table>
          <colgroup> <col width="20%"> <col width="80%"> </colgroup>
-            <tr><td> <b>lowSoc</b>    </td><td>unterer Mindest-SoC, die Batterie wird nicht tiefer als dieser Wert entladen (> 0)        </td></tr>
-            <tr><td> <b>upSoC</b>     </td><td>oberer Mindest-SoC, der übliche Wert des optimalen SoC bewegt sich zwischen 'lowSoC'      </td></tr>
-            <tr><td>                  </td><td>und diesem Wert.                                                                          </td></tr>
-            <tr><td> <b>maxSoC</b>    </td><td>maximaler Mindest-SoC, SoC Wert der mindestens im Abstand von 'careCycle' Tagen erreicht  </td></tr>
-            <tr><td>                  </td><td>werden muß um den Ladungsausgleich im Speicherverbund auszuführen.                        </td></tr>
-            <tr><td>                  </td><td>Die Angabe ist optional (&lt;= 100, default: 95)                                      </td></tr>
-            <tr><td> <b>careCycle</b> </td><td>maximaler Abstand in Tagen, der zwischen zwei Ladungszuständen von mindestens 'maxSoC'    </td></tr>
-            <tr><td>                  </td><td>auftreten darf. Die Angabe ist optional (default: 20)                                     </td></tr>
+            <tr><td> <b>lowSoc</b>    </td><td>unterer Mindest-SoC - Die Batterie wird nicht tiefer als dieser Wert entladen (> 0)             </td></tr>
+            <tr><td> <b>upSoC</b>     </td><td>oberer Mindest-SoC - Der übliche Wert des optimalen SoC bewegt sich in Perioden mit hohen       </td></tr>
+            <tr><td>                  </td><td>PV-Überschuß tendenziell zwischen 'lowSoC' und 'upSoC', in Perioden mit geringem PV-Überschuß   </td></tr>
+            <tr><td>                  </td><td>tendenziell zwischen 'upSoC' und 'maxSoC'                                                       </td></tr>
+            <tr><td> <b>maxSoC</b>    </td><td>maximaler Mindest-SoC - SoC Wert der mindestens im Abstand von 'careCycle' Tagen erreicht       </td></tr>
+            <tr><td>                  </td><td>werden muß um den Ladungsausgleich im Speicherverbund auszuführen.                              </td></tr>
+            <tr><td>                  </td><td>Die Angabe ist optional (&lt;= 100, default: 95)                                                </td></tr>
+            <tr><td> <b>careCycle</b> </td><td>maximaler Abstand in Tagen, der zwischen zwei Ladungszuständen von mindestens 'maxSoC'          </td></tr>
+            <tr><td>                  </td><td>auftreten darf. Die Angabe ist optional (default: 20)                                           </td></tr>
          </table>
          </ul>
          <br>
