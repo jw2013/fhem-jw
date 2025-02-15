@@ -34,7 +34,6 @@ package FHEM::SolarForecast;                                                    
 
 use strict;
 use warnings;
-#use lib qw(/opt/fhem/FHEM  /opt/fhem/lib);                                           # für Syntaxcheck mit: perl -c /opt/fhem/FHEM/76_SolarForecast.pm
 use POSIX;
 use GPUtils qw(GP_Import GP_Export);                                                 # wird für den Import der FHEM Funktionen aus der fhem.pl benötigt
 use Time::HiRes qw(gettimeofday tv_interval);
@@ -50,7 +49,7 @@ use Color;
 use utf8;
 use HttpUtils;
 eval "use JSON;1;"                        or my $jsonabs = 'JSON';                   ## no critic 'eval' # Debian: sudo apt-get install libjson-perl
-eval "use AI::DecisionTree;1;"            or my $aidtabs = 'AI::DecisionTree';       ## no critic 'eval'
+eval "use AI::DecisionTree;1;"            or my $aidtabs = 'AI::DecisionTree';       ## no critic 'eval' # Debian: sudo apt-get install libai-decisiontree-perl
 
 use FHEM::SynoModules::ErrCodes qw(:all);                                            # Error Code Modul
 use FHEM::SynoModules::SMUtils qw (checkModVer
@@ -160,6 +159,22 @@ BEGIN {
 
 # Versions History intern
 my %vNotesIntern = (
+  "1.45.6" => "12.02.2025  Notification System: print out next planned file pull, timestringsFromOffset: allow +- offsets ".
+                           "new sub _calcConsumptionForecast_circular to prepare the evaluation of consumption days in pvCircular ",
+  "1.45.5" => "09.02.2025  change constant GMFILEREPEAT, GMFILERANDOM, Pull Message File from GitHub Repo ",
+  "1.45.4" => "08.02.2025  change constant GMFILEREPEAT + new constant GMFILERANDOM ",
+  "1.45.3" => "06.02.2025  __readDataWeather: if no values of hour 01 (00:00+) use val of hour 24 of day before ".
+                           "new special reading todayConsumption ",
+  "1.45.2" => "05.02.2025  aiAddRawData: temp, con, wcc, rr1c, rad1h = undef if no value in pvhistory, fix isWeatherDevValid ".
+                           "__readDataWeather(API): fix no values of hour 01 (00:00+), weather_ids: more weather entries ".
+                           "change weather display management (don), some minor bugfixes ",
+  "1.45.1" => "02.02.2025  _specialActivities: Task 1 __deleteEveryHourControls changed, all Tasks adapted ".
+                           "_retrieveMessageFile: fix path in __updWriteFile, fix https://forum.fhem.de/index.php?msg=1332721 ",
+  "1.45.0" => "01.02.2025  new function timestringsFromOffset, _batChargeRecmd: change condition for load release ".
+                           "_addHourAiRawdata: add hour 24 (of day before), remove x-migrate -> auto migrate pv data ".
+                           "Pool output width limited to 140 characters, checkPlantConfig: add installen Perl Modules check ",
+  "1.44.5" => "30.01.2025  temp2bin: expand to more negative bins, bugfix: https://forum.fhem.de/index.php?msg=1332421 ".
+                           "expand data collection dayname, con for AI support, Task 1: delete readings Error, Errorcode ",  
   "1.44.4" => "26.01.2025  _getlistPVCircular: change width of output, new sub _listDataPoolPvHist, fix bug in hrepl Hash ".
                            "remove Attr graphicBeam1MaxVal,ctrlAreaFactorUsage ",
   "1.44.3" => "25.01.2025  Notification System: minor changes, special Readings todayBatInSum todayBatOutSum ",
@@ -330,7 +345,7 @@ my %vNotesIntern = (
                            "integrate OpenMeteoWorld-API with the 'Best match' Weather model ",
   "1.17.1" => "27.03.2024  add AI to OpenMeteoDWD-API, changed AI train debuglog, new attr ctrlAIshiftTrainStart ".
                            "_specialActivities: split tasks to several time slots, bugfixes ".
-                           "AI: modify aiAddInstance, Customize pattern training data ".
+                           "AI: modify aiAddInstancePV, Customize pattern training data ".
                            "add batteryTrigger to save plantconfig, valDecTree: more infos in get aiRuleStrings ",
   "1.17.0" => "24.03.2024  new DWD ICON API, change defmaxvar from 0.5 to 0.8, attr ctrlWeatherDev1 can select OpenMeteoDWD-API ",
   "1.16.8" => "16.03.2024  plantConfigCheck: adjust pvCorrectionFactor_Auto check, settings of forecastRefresh ".
@@ -353,53 +368,118 @@ my %vNotesIntern = (
                            "delete wrp from circular & airaw, remove rain2bin, __getDWDSolarData: change \$runh, ".
                            "fix  Illegal division by zero Forum: https://forum.fhem.de/index.php?msg=1304009 ".
                            "DWD API: check age of Rad1h data, store pvcorrf of sunalt with value 200+x in pvCircular ",
-  "1.16.1" => "14.02.2024  ___isCatFiltered: add eval for regex evaluation, add sunaz to AI raw and get, fillup AI hash ",
-  "1.16.0" => "12.02.2024  new command get dwdCatalog ",
-  "1.15.5" => "11.02.2024  change forecastQualities output, new limits for 'accurate' and 'spreaded' results from AI ".
-                           "checkPlantConfig: change common check info output ".
-                           "fix load Astro ",
-  "1.15.4" => "10.02.2024  integrate sun position from Astro module, setPVhistory: change some writes ".
-                           "_transferAPIRadiationValues: consider 'accurate' or 'spreaded' result from AI".
-                           "___calcPeaklossByTemp: bugfix temp, rename moduleDirection to moduleAzimuth ".
-                           "rename moduleTiltAngle to moduleDeclination, checkPlantConfig: check global altitude attr ",
-  "1.15.3" => "06.02.2024  Header: add links to the API website dependend from the used API ",
-  "1.15.2" => "05.02.2024  __mergeDataWeather: fix merger failures, number of temperature decimal places ".
-                           "cicrular Hash: replace 'percentile' by 'simple' ",
-  "1.15.1" => "04.02.2024  checkPlantConfig: fix check attribute ctrlWeatherDevX ",
-  "1.15.0" => "03.02.2024  reduce cpu utilization, add attributes ctrlWeatherDev2, ctrlWeatherDev3 ",
-  "1.14.3" => "02.02.2024  _transferWeatherValues: first step of multi weather device merger ",
-  "1.14.2" => "02.02.2024  fix warning, _transferAPIRadiationValues: Consider upper and lower deviation limit AI to API forecast ",
-  "1.14.1" => "01.02.2024  language support for ___setConsumerPlanningState -> supplement, fix setting 'swoncond not met' ",
-  "1.14.0" => "31.01.2024  data maintenance, new func _addDynAttr for adding attributes at runtime ".
-                           "replace setter currentWeatherDev by attr ctrlWeatherDev1, new data with func CircularSumVal ".
-                           "rewrite correction factor calculation with _calcCaQcomplex, _calcCaQsimple, __calcNewFactor ",
-  "1.13.0" => "27.01.2024  minor change of deleteOldBckpFiles, Setter writeHistory replaced by operatingMemory ".
-                           "save, backup and recover in-memory operating data ",
-  "1.12.0" => "26.01.2024  create backup files and delete old generations of them ",
-  "1.11.1" => "26.01.2024  fix ___switchonTimelimits ",
-  "1.11.0" => "25.01.2024  consumerXX: notbefore, notafter format extended to possible perl code {...} ",
-  "1.10.0" => "24.01.2024  consumerXX: notbefore, notafter format extended to hh[:mm], new sub checkCode, checkhhmm ",
-  "1.9.0"  => "23.01.2024  modify disable, add operationMode: active/inactive ",
-  "1.8.0"  => "22.01.2024  add 'noLearning' Option to Setter pvCorrectionFactor_Auto ",
   "0.1.0"  => "09.12.2020  initial Version "
 );
+
+## Konstanten
+######################
+use constant {
+  LPOOLLENLIM    => 140,                                                            # Breitenbegrenzung der Ausgabe von List Pooldaten
+  KJ2KWH         => 0.0002777777778,                                                # Umrechnungsfaktor kJ in kWh
+  KJ2WH          => 0.2777777778,                                                   # Umrechnungsfaktor kJ in Wh
+  WH2KJ          => 3.6,                                                            # Umrechnungsfaktor Wh in kJ
+  DEFLANG        => 'EN',                                                           # default Sprache wenn nicht konfiguriert
+  DEFMAXVAR      => 0.75,                                                           # max. Varianz pro Tagesberechnung Autokorrekturfaktor (geändert V.45.0 mit Median Verfahren)
+  DEFINTERVAL    => 70,                                                             # Standard Abfrageintervall
+  SLIDENUMMAX    => 3,                                                              # max. Anzahl der Arrayelemente in Schieberegistern
+  SPLSLIDEMAX    => 20,                                                             # max. Anzahl der Arrayelemente in Schieberegister PV Überschuß
+  WHISTREPEAT    => 851,                                                            # Wiederholungsintervall Cache File Daten schreiben
+  EPIECMAXCYCLES => 10,                                                             # Anzahl Einschaltzyklen (Consumer) für verbraucherspezifische Energiestück Ermittlung
+
+  MAXWEATHERDEV  => 3,                                                              # max. Anzahl Wetter Devices (Attr setupWeatherDevX)
+  MAXBATTERIES   => 3,                                                              # maximale Anzahl der möglichen Batterien
+  MAXCONSUMER    => 16,                                                             # maximale Anzahl der möglichen Consumer (Attribut)
+  MAXPRODUCER    => 3,                                                              # maximale Anzahl der möglichen anderen Produzenten (Attribut)
+  MAXINVERTER    => 3,                                                              # maximale Anzahl der möglichen Inverter
+
+  MAXSOCDEF      => 95,                                                             # default Wert (%) auf den die Batterie maximal aufgeladen werden soll bzw. als aufgeladen gilt
+  CARECYCLEDEF   => 20,                                                             # default max. Anzahl Tage die zwischen der Batterieladung auf maxSoC liegen dürfen
+  BATSOCCHGDAY   => 5,                                                              # Batterie: prozentuale SoC Anpassung pro Tag
+
+  GMFBLTO        => 30,                                                             # Timeout Aholen Message File aus contrib
+  GMFILEREPEAT   => 3600,                                                           # Base Wiederholungsuntervall Abholen Message File aus contrib
+  GMFILERANDOM   => 10800,                                                          # Random AddOn zu GMFILEREPEAT
+  IDXLIMIT       => 900000,                                                         # Notification System: Indexe > IDXLIMIT sind reserviert für Steuerungsaufgaben
+
+  AITRBLTO       => 7200,                                                           # KI Training BlockingCall Timeout
+  AIBCTHHLD      => 0.2,                                                            # Schwelle der KI Trainigszeit ab der BlockingCall benutzt wird
+  AITRSTARTDEF   => 2,                                                              # default Stunde f. Start AI-Training
+  AISTDUDEF      => 1825,                                                           # default Haltezeit KI Raw Daten (Tage)
+  AISPREADUPLIM  => 120,                                                            # obere Abweichungsgrenze (%) AI 'Spread' von API Prognose
+  AISPREADLOWLIM => 80,                                                             # untere Abweichungsgrenze (%) AI 'Spread' von API Prognose
+  AIACCUPLIM     => 130,                                                            # obere Abweichungsgrenze (%) AI 'Accurate' von API Prognose
+  AIACCLOWLIM    => 70,                                                             # untere Abweichungsgrenze (%) AI 'Accurate' von API Prognose
+  AIACCTRNMIN    => 5500,                                                           # Mindestanzahl KI Trainingssätze für Verwendung "KI Accurate"
+  AISPREADTRNMIN => 7000,                                                           # Mindestanzahl KI Trainingssätze für Verwendung "KI Spreaded"
+
+  SOLAPIREPDEF   => 3600,                                                           # default Abrufintervall SolCast API (s)
+  FORAPIREPDEF   => 900,                                                            # default Abrufintervall ForecastSolar API (s)
+  OMETEOREPDEF   => 900,                                                            # default Abrufintervall Open-Meteo API (s)
+  VRMAPIREPDEF   => 300,                                                            # default Abrufintervall Victron VRM API Forecast
+  SOLCMAXREQDEF  => 50,                                                             # max. täglich mögliche Requests SolCast API
+  OMETMAXREQ     => 9700,                                                           # Beschränkung auf max. mögliche Requests Open-Meteo API
+  LEADTIME       => 3600,                                                           # relative Zeit vor Sonnenaufgang zur Freigabe API Abruf / Verbraucherplanung
+  LAGTIME        => 1800,                                                           # Nachlaufzeit relativ zu Sunset bis Sperrung API Abruf
+
+  PRDEF          => 1.0,                                                            # default Performance Ratio (PR)
+  STOREFFDEF     => 0.9,                                                            # default Batterie Effizienz (https://www.energie-experten.org/erneuerbare-energien/photovoltaik/stromspeicher/wirkungsgrad)
+  TEMPCOEFFDEF   => -0.45,                                                          # default Temperaturkoeffizient Pmpp (%/°C) lt. Datenblatt Solarzelle
+  TEMPMODINC     => 25,                                                             # default Temperaturerhöhung an Solarzellen gegenüber Umgebungstemperatur bei wolkenlosem Himmel
+  TEMPBASEDEF    => 25,                                                             # Temperatur Module bei Nominalleistung
+  
+  DEFMINTIME     => 60,                                                             # default Einplanungsdauer in Minuten
+  DEFCTYPE       => 'other',                                                        # default Verbrauchertyp
+  DEFCMODE       => 'can',                                                          # default Planungsmode der Verbraucher
+  DEFPOPERCENT   => 1.0,                                                            # Standard % aktuelle Leistung an nominaler Leistung gemäß Typenschild
+  DEFHYST        => 0,                                                              # default Hysterese
+  
+  CAICONDEF       => 'clock@gold',                                                  # default consumerAdviceIcon
+  FLOWGSIZEDEF    => 400,                                                           # default flowGraphicSize
+  HISTHOURDEF     => 2,                                                             # default Anzeige vorangegangene Stunden
+  WTHCOLDDEF      => 'C7C979',                                                      # Wetter Icon Tag default Farbe
+  WTHCOLNDEF      => 'C7C7C7',                                                      # Wetter Icon Nacht default Farbe
+  B1COLDEF        => 'FFAC63',                                                      # default Farbe Beam 1
+  B1FONTCOLDEF    => '0D0D0D',                                                      # default Schriftfarbe Beam 1
+  B2COLDEF        => 'C4C4A7',                                                      # default Farbe Beam 2
+  B2FONTCOLDEF    => '000000',                                                      # default Schriftfarbe Beam 2
+  B3COLDEF        => 'BED6C0',                                                      # default Farbe Beam 3
+  B3FONTCOLDEF    => '000000',                                                      # default Schriftfarbe Beam 3
+  B4COLDEF        => 'DBDBD0',                                                      # default Farbe Beam 4
+  B4FONTCOLDEF    => '000000',                                                      # default Schriftfarbe Beam 4
+  FGCDDEF         => 130,                                                           # Abstand Verbrauchericons zueinander
+  
+  FGSCALEDEF      => 0.10,                                                          # Flußgrafik: Scale Normativ Icons
+  STROKCOLSTDDEF  => 'darkorange',                                                  # Flußgrafik: Standardfarbe aktive normale Kette
+  STROKCOLSIGDEF  => 'red',                                                         # Flußgrafik: Standardfarbe aktive Signal-Kette
+  STROKCOLINADEF  => 'gray',                                                        # Flußgrafik: Standardfarbe inaktive Kette
+  STROKWIDTHDEF   => 25,                                                            # Flußgrafik: Standard Breite der Kette
+  PRODICONDEF     => 'sani_garden_pump',                                            # default Producer-Icon
+  CICONDEF        => 'light_light_dim_100',                                         # default Consumer-Icon
+  CICONCOLDEF     => 'darkorange',                                                  # default Consumer-Icon Färbung
+  BICONDEF        => 'measure_battery_75',                                          # default Batterie-Icon
+  BICCOLRCDDEF    => 'grey',                                                        # default Batterie-Icon Färbung bei Ladefreigabe und Inaktivität
+  BICCOLNRCDDEF   => '#cccccc',                                                     # default Batterie-Icon Färbung bei fehlender Ladefreigabe
+  BCHGICONCOLDEF  => 'darkorange',                                                  # default 'Aufladen' Batterie-Icon Färbung
+  BDCHICONCOLDEF  => '#b32400',                                                     # default 'Entladen' Batterie-Icon Färbung
+  HOMEICONDEF     => 'control_building_control@grey',                               # default Home-Icon
+  NODEICONDEF     => 'virtualbox',                                                  # default Knoten-Icon
+  INVICONDEF      => 'weather_sun',                                                 # default Inverter-icon
+  MOONICONDEF     => 2,                                                             # default Mond-Phase (aus %hmoon)
+  MOONCOLDEF      => 'lightblue',                                                   # default Mond Färbung
+  ACTCOLDEF       => 'orange',                                                      # default Färbung Icon wenn aktiv
+  INACTCOLDEF     => 'grey',                                                        # default Färbung Icon wenn inaktiv
+  
+  BPATH           => 'https://svn.fhem.de/trac/browser/trunk/fhem/contrib/SolarForecast/',                 # Basispfad Abruf contrib SolarForecast Files
+  PPATH           => '?format=txt',                                                                        # Download Format
+  CFILE           => 'controls_solarforecast.txt',                                                         # Controlfile Update FTUI-Files  
+  BGHPATH         => 'https://raw.githubusercontent.com/nasseeder1/FHEM-SolarForecast/refs/heads/main/',   # Basispfad GitHub SolarForecast Files
+  PGHPATH         => '',                                                                                   # GitHub Post Pfad
+};
 
 ## Standardvariablen
 ######################
 my @da;                                                                             # zentraler temporärer Readings-Store
-my $deflang        = 'EN';                                                          # default Sprache wenn nicht konfiguriert
 my @chours         = (5..21);                                                       # Stunden des Tages mit möglichen Korrekturwerten
-my $kJtokWh        = 0.0002777777778;                                               # Umrechnungsfaktor kJ in kWh
-my $kJtoWh         = 0.2777777778;                                                  # Umrechnungsfaktor kJ in Wh
-my $WhtokJ         = 3.6;                                                           # Umrechnungsfaktor Wh in kJ
-my $defmaxvar      = 0.5;                                                           # max. Varianz pro Tagesberechnung Autokorrekturfaktor
-my $definterval    = 70;                                                            # Standard Abfrageintervall
-my $slidenummax    = 3;                                                             # max. Anzahl der Arrayelemente in Schieberegistern
-my $splslidenummax = 20;                                                            # max. Anzahl der Arrayelemente in Schieberegister PV Überschuß
-my $weatherDevMax  = 3;                                                             # max. Anzahl Wetter Devices (Attr setupWeatherDevX)
-my $maxSoCdef      = 95;                                                            # default Wert (%) auf den die Batterie maximal aufgeladen werden soll bzw. als aufgeladen gilt
-my $carecycledef   = 20;                                                            # max. Anzahl Tage die zwischen der Batterieladung auf maxSoC liegen dürfen
-my $batSocChgDay   = 5;                                                             # prozentuale SoC Änderung pro Tag
 my @widgetreadings = ();                                                            # Array der Hilfsreadings als Attributspeicher
 
 my $root           = $attr{global}{modpath};                                        # Pfad zu dem Verzeichnis der FHEM Module
@@ -417,95 +497,13 @@ my $dwdcatalog     = $root."/FHEM/FhemUtils/DWDcat_SolarForecast";              
 my $dwdcatgpx      = $root."/FHEM/FhemUtils/DWDcat_SolarForecast.gpx";              # Export Filename für DWD Stationskatalog im gpx-Format
 my $pvhexprtcsv    = $root."/FHEM/FhemUtils/PVH_Export_SolarForecast_";             # Filename-Fragment für PV History Exportfile (wird mit Devicename ergänzt)
 
-my $aitrblto       = 7200;                                                          # KI Training BlockingCall Timeout
-my $aibcthhld      = 0.2;                                                           # Schwelle der KI Trainigszeit ab der BlockingCall benutzt wird
-my $aitrstartdef   = 2;                                                             # default Stunde f. Start AI-Training
-my $aistdudef      = 1825;                                                          # default Haltezeit KI Raw Daten (Tage)
-my $aiSpreadUpLim  = 120;                                                           # obere Abweichungsgrenze (%) AI 'Spread' von API Prognose
-my $aiSpreadLowLim = 80;                                                            # untere Abweichungsgrenze (%) AI 'Spread' von API Prognose
-my $aiAccUpLim     = 130;                                                           # obere Abweichungsgrenze (%) AI 'Accurate' von API Prognose
-my $aiAccLowLim    = 70;                                                            # untere Abweichungsgrenze (%) AI 'Accurate' von API Prognose
-my $aiAccTRNMin    = 5500;                                                          # Mindestanzahl KI Trainingssätze für Verwendung "KI Accurate"
-my $aiSpreadTRNMin = 7000;                                                          # Mindestanzahl KI Trainingssätze für Verwendung "KI Spreaded"
-
-my $calcmaxd       = 30;                                                            # Anzahl Tage die zur Berechnung Vorhersagekorrektur verwendet werden
 my @dweattrmust    = qw(TTT Neff RR1c ww SunUp SunRise SunSet);                     # Werte die im Attr forecastProperties des Weather-DWD_Opendata Devices mindestens gesetzt sein müssen
 my @draattrmust    = qw(Rad1h);                                                     # Werte die im Attr forecastProperties des Radiation-DWD_Opendata Devices mindestens gesetzt sein müssen
-my $whistrepeat    = 851;                                                           # Wiederholungsintervall Cache File Daten schreiben
-my $gmfblto        = 30;                                                            # Timeout Aholen Message File aus contrib
-
-my $solapirepdef   = 3600;                                                          # default Abrufintervall SolCast API (s)
-my $forapirepdef   = 900;                                                           # default Abrufintervall ForecastSolar API (s)
-my $ometeorepdef   = 900;                                                           # default Abrufintervall Open-Meteo API (s)
-my $vrmapirepdef   = 300;                                                           # default Abrufintervall Victron VRM API Forecast
-my $solcmaxreqdef  = 50;                                                            # max. täglich mögliche Requests SolCast API
-my $ometmaxreq     = 9700;                                                          # Beschränkung auf max. mögliche Requests Open-Meteo API
-my $leadtime       = 3600;                                                          # relative Zeit vor Sonnenaufgang zur Freigabe API Abruf / Verbraucherplanung
-my $lagtime        = 1800;                                                          # Nachlaufzeit relativ zu Sunset bis Sperrung API Abruf
-
-my $prdef          = 1.0;                                                           # default Performance Ratio (PR)
-my $storeffdef     = 0.9;                                                           # default Batterie Effizienz (https://www.energie-experten.org/erneuerbare-energien/photovoltaik/stromspeicher/wirkungsgrad)
-my $tempcoeffdef   = -0.45;                                                         # default Temperaturkoeffizient Pmpp (%/°C) lt. Datenblatt Solarzelle
-my $tempmodinc     = 25;                                                            # default Temperaturerhöhung an Solarzellen gegenüber Umgebungstemperatur bei wolkenlosem Himmel
-my $tempbasedef    = 25;                                                            # Temperatur Module bei Nominalleistung
-
-my $maxbatteries   = 3;                                                             # maximale Anzahl der möglichen Batterien
-my $maxconsumer    = 16;                                                            # maximale Anzahl der möglichen Consumer (Attribut)
-my $maxproducer    = 3;                                                             # maximale Anzahl der möglichen anderen Produzenten (Attribut)
-my $maxinverter    = 3;                                                             # maximale Anzahl der möglichen Inverter
-
-my $epiecMaxCycles = 10;                                                            # Anzahl Einschaltzyklen (Consumer) für verbraucherspezifische Energiestück Ermittlung
 my @ctypes         = qw(dishwasher dryer washingmachine heater charger other
                         noSchedule);                                                # erlaubte Consumer Typen
-my $defmintime     = 60;                                                            # default Einplanungsdauer in Minuten
-my $defctype       = 'other';                                                       # default Verbrauchertyp
-my $defcmode       = 'can';                                                         # default Planungsmode der Verbraucher
-my $defpopercent   = 1.0;                                                           # Standard % aktuelle Leistung an nominaler Leistung gemäß Typenschild
-my $defhyst        = 0;                                                             # default Hysterese
-
-my $caicondef      = 'clock@gold';                                                  # default consumerAdviceIcon
-my $flowGSizedef   = 400;                                                           # default flowGraphicSize
-my $histhourdef    = 2;                                                             # default Anzeige vorangegangene Stunden
-my $wthcolddef     = 'C7C979';                                                      # Wetter Icon Tag default Farbe
-my $wthcolndef     = 'C7C7C7';                                                      # Wetter Icon Nacht default Farbe
-my $b1coldef       = 'FFAC63';                                                      # default Farbe Beam 1
-my $b1fontcoldef   = '0D0D0D';                                                      # default Schriftfarbe Beam 1
-my $b2coldef       = 'C4C4A7';                                                      # default Farbe Beam 2
-my $b2fontcoldef   = '000000';                                                      # default Schriftfarbe Beam 2
-my $b3coldef       = 'BED6C0';                                                      # default Farbe Beam 3
-my $b3fontcoldef   = '000000';                                                      # default Schriftfarbe Beam 3
-my $b4coldef       = 'DBDBD0';                                                      # default Farbe Beam 4
-my $b4fontcoldef   = '000000';                                                      # default Schriftfarbe Beam 4
-my $fgCDdef        = 130;                                                           # Abstand Verbrauchericons zueinander
-
-my $fgscaledef     = 0.10;                                                          # Flußgrafik: Scale Normativ Icons
-my $strokcolstddef = 'darkorange';                                                  # Flußgrafik: Standardfarbe aktive normale Kette
-my $strokcolsigdef = 'red';                                                         # Flußgrafik: Standardfarbe aktive Signal-Kette
-my $strokcolinadef = 'gray';                                                        # Flußgrafik: Standardfarbe inaktive Kette
-my $strokwidthdef  = 25;                                                            # Flußgrafik: Standard Breite der Kette
-my $prodicondef    = 'sani_garden_pump';                                            # default Producer-Icon
-my $cicondef       = 'light_light_dim_100';                                         # default Consumer-Icon
-my $ciconcoldef    = 'darkorange';                                                  # default Consumer-Icon Färbung
-my $bicondef       = 'measure_battery_75';                                          # default Batterie-Icon
-my $biccolrcddef   = 'grey';                                                        # default Batterie-Icon Färbung bei Ladefreigabe und Inaktivität
-my $biccolnrcddef  = '#cccccc';                                                     # default Batterie-Icon Färbung bei fehlender Ladefreigabe
-my $bchgiconcoldef = 'darkorange';                                                  # default 'Aufladen' Batterie-Icon Färbung
-my $bdchiconcoldef = '#b32400';                                                     # default 'Entladen' Batterie-Icon Färbung
-my $homeicondef    = 'control_building_control@grey';                               # default Home-Icon
-my $nodeicondef    = 'virtualbox';                                                  # default Knoten-Icon
-my $invicondef     = 'weather_sun';                                                 # default Inverter-icon
-my $moonicondef    = 2;                                                             # default Mond-Phase (aus %hmoon)
-my $mooncoldef     = 'lightblue';                                                   # default Mond Färbung
-my $actcoldef      = 'orange';                                                      # default Färbung Icon wenn aktiv
-my $inactcoldef    = 'grey';                                                        # default Färbung Icon wenn inaktiv
-
-my $bPath = 'https://svn.fhem.de/trac/browser/trunk/fhem/contrib/SolarForecast/';   # Basispfad Abruf contrib SolarForecast Files
-my $cfile        = 'controls_solarforecast.txt';                                    # Controlfile Update FTUI-Files
-my $msgfiletest  = 'controls_solarforecast_messages_test.txt';                      # TEST Input-File Notification System
-my $msgfileprod  = 'controls_solarforecast_messages_prod.txt';                      # PRODUKTIVES Input-File Notification System
-my $pPath        = '?format=txt';                                                   # Download Format
-my $gmfilerepeat = 4600;                                                            # Wiederholungsuntervall Abholen Message File aus contrib
-my $idxlimit     = 900000;                                                          # Notification System: Indexe > $idxlimit sind reserviert für Steuerungsaufgaben
+ 
+my $msgfiletest    = 'controls_solarforecast_messages_test.txt';                                           # TEST Input-File Notification System
+my $msgfileprod    = 'controls_solarforecast_messages_prod.txt';                                           # PRODUKTIVES Input-File Notification System
 
 my $messagefile = $msgfileprod;
                                                                                     # mögliche Debug-Module
@@ -565,24 +563,24 @@ my @aconfigs = qw( affectBatteryPreferredCharge affectConsForecastIdentWeekdays
                    setupRoofTops
                  );
 
-for my $cn (1..$maxconsumer) {
+for my $cn (1..MAXCONSUMER) {
   $cn = sprintf "%02d", $cn;
   push @aconfigs, "consumer${cn}";                            # Anlagenkonfiguration: add Consumer Attribute
   push @dd,       "consumerSwitching${cn}";                   # ctrlDebug: add specific Consumer
 }
 
-for my $bn (1..$maxbatteries) {
+for my $bn (1..MAXBATTERIES) {
   $bn = sprintf "%02d", $bn;
   push @aconfigs, "setupBatteryDev${bn}";                     # Anlagenkonfiguration: add Battery Attribute
   push @aconfigs, "ctrlBatSocManagement${bn}";
 }
 
-for my $in (1..$maxinverter) {
+for my $in (1..MAXINVERTER) {
   $in = sprintf "%02d", $in;
   push @aconfigs, "setupInverterDev${in}";                    # Anlagenkonfiguration: add Inverter Attribute
 }
 
-for my $pn (1..$maxproducer) {
+for my $pn (1..MAXPRODUCER) {
   $pn = sprintf "%02d", $pn;
   push @aconfigs, "setupOtherProducer${pn}";                  # Anlagenkonfiguration: add Producer Attribute
 }
@@ -658,7 +656,6 @@ my %hget = (                                                                # Ha
   ftuiFramefiles     => { fn => \&_ftuiFramefiles,              needcred => 0 },
   dwdCatalog         => { fn => \&_getdwdCatalog,               needcred => 0 },
   outputMessages     => { fn => \&_getoutputMessages,           needcred => 0 },
-  x_migrate          => { fn => \&_getmigrate,                  needcred => 0 },
 );
 
 my %hattr = (                                                                # Hash für Attr-Funktion
@@ -677,17 +674,17 @@ my %hattr = (                                                                # H
   flowGraphicControl        => { fn => \&_attrflowGraphicControl  },
 );
 
-  for my $bn (1..$maxbatteries) {
+  for my $bn (1..MAXBATTERIES) {
       $bn = sprintf "%02d", $bn;
       $hattr{'setupBatteryDev'.$bn}{fn} = \&_attrBatteryDev;
   }
   
-  for my $in (1..$maxinverter) {
+  for my $in (1..MAXINVERTER) {
       $in = sprintf "%02d", $in;
       $hattr{'setupInverterDev'.$in}{fn} = \&_attrInverterDev;
   }
   
-  for my $prn (1..$maxproducer) {
+  for my $prn (1..MAXPRODUCER) {
       $prn = sprintf "%02d", $prn;
       $hattr{'setupOtherProducer'.$prn}{fn} = \&_attrProducerDev;
   }
@@ -824,8 +821,10 @@ my %hqtxt = (                                                                # H
               DE => qq{Wichtigkeit}                                                                                         },
   number => { EN => qq{Number},
               DE => qq{Nummer}                                                                                              },
-  ludich => { EN => qq{last update Input channels},
-              DE => qq{letzte Aktualisierung Eingangskan&auml;le}                                                           },  
+  impcha => { EN => qq{Input channels},
+              DE => qq{Eingangskan&auml;le}                                                                                 },  
+  scedld => { EN => qq{scheduled},
+              DE => qq{geplant}                                                                                             }, 
   ctnsly => { EN => qq{continuously},
               DE => qq{fortlaufend}                                                                                         },
   yday   => { EN => qq{yesterday},
@@ -1024,126 +1023,203 @@ my %htitles = (                                                                 
 my %weather_ids = (
   # s =>  0 , 0 - 3   DWD -> kein signifikantes Wetter
   # s =>  1 , 45 - 99 DWD -> signifikantes Wetter
-  '0'   => { s => '0', icon => 'weather_sun',              txtd => 'sonnig',                                                                   txte => 'sunny'                                                                      },
-  '1'   => { s => '0', icon => 'weather_cloudy_light',     txtd => 'Bewölkung abnehmend',                                                      txte => 'Cloudiness decreasing'                                                      },
-  '2'   => { s => '0', icon => 'weather_cloudy',           txtd => 'Bewölkung unverändert',                                                    txte => 'Cloudiness unchanged'                                                       },
-  '3'   => { s => '0', icon => 'weather_cloudy_heavy',     txtd => 'Bewölkung zunehmend',                                                      txte => 'Cloudiness increasing'                                                      },
-  '4'   => { s => '0', icon => 'unknown',                  txtd => 'Sicht durch Rauch oder Asche vermindert',                                  txte => 'Visibility reduced by smoke or ash'                                         },
-  '5'   => { s => '0', icon => 'unknown',                  txtd => 'trockener Dunst (relative Feuchte < 80 %)',                                txte => 'dry haze (relative humidity < 80 %)'                                        },
-  '6'   => { s => '0', icon => 'unknown',                  txtd => 'verbreiteter Schwebstaub, nicht vom Wind herangeführt',                    txte => 'widespread airborne dust, not brought in by the wind'                       },
-  '7'   => { s => '0', icon => 'unknown',                  txtd => 'Staub oder Sand bzw. Gischt, vom Wind herangeführt',                       txte => 'Dust or sand or spray, brought in by the wind'                              },
-  '8'   => { s => '0', icon => 'unknown',                  txtd => 'gut entwickelte Staub- oder Sandwirbel',                                   txte => 'well-developed dust or sand vortex'                                         },
-  '9'   => { s => '0', icon => 'unknown',                  txtd => 'Staub- oder Sandsturm im Gesichtskreis, aber nicht an der Station',        txte => 'Dust or sand storm in the visual circle, but not at the station'            },
+  '0'   => { s => '0', icon => 'weather_sun',                       txtd => 'wolkenloser Himmel',                                                       txte => 'cloudless sky'                                                              },
+  '1'   => { s => '0', icon => 'weather_cloudy_light',              txtd => 'Bewölkung abnehmend',                                                      txte => 'Cloudiness decreasing'                                                      },
+  '2'   => { s => '0', icon => 'weather_cloudy',                    txtd => 'Bewölkung unverändert',                                                    txte => 'Cloudiness unchanged'                                                       },
+  '3'   => { s => '0', icon => 'weather_cloudy_heavy',              txtd => 'Bewölkung zunehmend',                                                      txte => 'Cloudiness increasing'                                                      },
+  '4'   => { s => '0', icon => 'unknown',                           txtd => 'Sicht durch Rauch oder Asche vermindert',                                  txte => 'Visibility reduced by smoke or ash'                                         },
+  '5'   => { s => '0', icon => 'unknown',                           txtd => 'trockener Dunst (relative Feuchte < 80 %)',                                txte => 'dry haze (relative humidity < 80 %)'                                        },
+  '6'   => { s => '0', icon => 'unknown',                           txtd => 'verbreiteter Schwebstaub, nicht vom Wind herangeführt',                    txte => 'widespread airborne dust, not brought in by the wind'                       },
+  '7'   => { s => '0', icon => 'unknown',                           txtd => 'Staub oder Sand bzw. Gischt, vom Wind herangeführt',                       txte => 'Dust or sand or spray, brought in by the wind'                              },
+  '8'   => { s => '0', icon => 'unknown',                           txtd => 'gut entwickelte Staub- oder Sandwirbel',                                   txte => 'well-developed dust or sand vortex'                                         },
+  '9'   => { s => '0', icon => 'unknown',                           txtd => 'Staub- oder Sandsturm im Gesichtskreis, aber nicht an der Station',        txte => 'Dust or sand storm in the visual circle, but not at the station'            },
 
-  '10'  => { s => '0', icon => 'weather_fog',              txtd => 'Nebel',                                                                    txte => 'Fog'                                                                        },
-  '11'  => { s => '0', icon => 'weather_rain_fog',         txtd => 'Nebel mit Regen',                                                          txte => 'Fog with rain'                                                              },
-  '12'  => { s => '0', icon => 'weather_fog',              txtd => 'durchgehender Bodennebel',                                                 txte => 'continuous ground fog'                                                      },
-  '13'  => { s => '0', icon => 'unknown',                  txtd => 'Wetterleuchten sichtbar, kein Donner gehört',                              txte => 'Weather light visible, no thunder heard'                                    },
-  '14'  => { s => '0', icon => 'unknown',                  txtd => 'Niederschlag im Gesichtskreis, nicht den Boden erreichend',                txte => 'Precipitation in the visual circle, not reaching the ground'                },
-  '15'  => { s => '0', icon => 'unknown',                  txtd => 'Niederschlag in der Ferne (> 5 km), aber nicht an der Station',            txte => 'Precipitation in the distance (> 5 km), but not at the station'             },
-  '16'  => { s => '0', icon => 'unknown',                  txtd => 'Niederschlag in der Nähe (< 5 km), aber nicht an der Station',             txte => 'Precipitation in the vicinity (< 5 km), but not at the station'             },
-  '17'  => { s => '0', icon => 'unknown',                  txtd => 'Gewitter (Donner hörbar), aber kein Niederschlag an der Station',          txte => 'Thunderstorm (thunder audible), but no precipitation at the station'        },
-  '18'  => { s => '0', icon => 'unknown',                  txtd => 'Markante Böen im Gesichtskreis, aber kein Niederschlag an der Station',    txte => 'marked gusts in the visual circle, but no precipitation at the station'     },
-  '19'  => { s => '0', icon => 'unknown',                  txtd => 'Tromben (trichterförmige Wolkenschläuche) im Gesichtskreis',               txte => 'Trombles (funnel-shaped cloud tubes) in the circle of vision'               },
+  '10'  => { s => '0', icon => 'weather_fog',                       txtd => 'Nebel',                                                                    txte => 'Fog'                                                                        },
+  '11'  => { s => '0', icon => 'weather_rain_fog',                  txtd => 'Nebel mit Regen',                                                          txte => 'Fog with rain'                                                              },
+  '12'  => { s => '0', icon => 'weather_fog',                       txtd => 'durchgehender Bodennebel',                                                 txte => 'continuous ground fog'                                                      },
+  '13'  => { s => '0', icon => 'unknown',                           txtd => 'Wetterleuchten sichtbar, kein Donner gehört',                              txte => 'Weather light visible, no thunder heard'                                    },
+  '14'  => { s => '0', icon => 'unknown',                           txtd => 'Niederschlag im Gesichtskreis, nicht den Boden erreichend',                txte => 'Precipitation in the visual circle, not reaching the ground'                },
+  '15'  => { s => '0', icon => 'unknown',                           txtd => 'Niederschlag in der Ferne (> 5 km), aber nicht an der Station',            txte => 'Precipitation in the distance (> 5 km), but not at the station'             },
+  '16'  => { s => '0', icon => 'unknown',                           txtd => 'Niederschlag in der Nähe (< 5 km), aber nicht an der Station',             txte => 'Precipitation in the vicinity (< 5 km), but not at the station'             },
+  '17'  => { s => '0', icon => 'unknown',                           txtd => 'Gewitter (Donner hörbar), aber kein Niederschlag an der Station',          txte => 'Thunderstorm (thunder audible), but no precipitation at the station'        },
+  '18'  => { s => '0', icon => 'unknown',                           txtd => 'Markante Böen im Gesichtskreis, aber kein Niederschlag an der Station',    txte => 'marked gusts in the visual circle, but no precipitation at the station'     },
+  '19'  => { s => '0', icon => 'unknown',                           txtd => 'Tromben (trichterförmige Wolkenschläuche) im Gesichtskreis',               txte => 'Trombles (funnel-shaped cloud tubes) in the circle of vision'               },
 
-  '20'  => { s => '0', icon => 'unknown',                  txtd => 'nach Sprühregen oder Schneegriesel',                                       txte => 'after drizzle or snow drizzle'                                              },
-  '21'  => { s => '0', icon => 'unknown',                  txtd => 'nach Regen',                                                               txte => 'after rain'                                                                 },
-  '22'  => { s => '0', icon => 'unknown',                  txtd => 'nach Schnefall',                                                           txte => 'after snowfall'                                                             },
-  '23'  => { s => '0', icon => 'unknown',                  txtd => 'nach Schneeregen oder Eiskörnern',                                         txte => 'after sleet or ice grains'                                                  },
-  '24'  => { s => '0', icon => 'unknown',                  txtd => 'nach gefrierendem Regen',                                                  txte => 'after freezing rain'                                                        },
-  '25'  => { s => '0', icon => 'unknown',                  txtd => 'nach Regenschauer',                                                        txte => 'after rain shower'                                                          },
-  '26'  => { s => '0', icon => 'unknown',                  txtd => 'nach Schneeschauer',                                                       txte => 'after snow shower'                                                          },
-  '27'  => { s => '0', icon => 'unknown',                  txtd => 'nach Graupel- oder Hagelschauer',                                          txte => 'after sleet or hail showers'                                                },
-  '28'  => { s => '0', icon => 'unknown',                  txtd => 'nach Nebel',                                                               txte => 'after fog'                                                                  },
-  '29'  => { s => '0', icon => 'unknown',                  txtd => 'nach Gewitter',                                                            txte => 'after thunderstorm'                                                         },
+  '20'  => { s => '0', icon => 'unknown',                           txtd => 'nach Sprühregen oder Schneegriesel',                                       txte => 'after drizzle or snow drizzle'                                              },
+  '21'  => { s => '0', icon => 'unknown',                           txtd => 'nach Regen',                                                               txte => 'after rain'                                                                 },
+  '22'  => { s => '0', icon => 'unknown',                           txtd => 'nach Schnefall',                                                           txte => 'after snowfall'                                                             },
+  '23'  => { s => '0', icon => 'unknown',                           txtd => 'nach Schneeregen oder Eiskörnern',                                         txte => 'after sleet or ice grains'                                                  },
+  '24'  => { s => '0', icon => 'unknown',                           txtd => 'nach gefrierendem Regen',                                                  txte => 'after freezing rain'                                                        },
+  '25'  => { s => '0', icon => 'unknown',                           txtd => 'nach Regenschauer',                                                        txte => 'after rain shower'                                                          },
+  '26'  => { s => '0', icon => 'unknown',                           txtd => 'nach Schneeschauer',                                                       txte => 'after snow shower'                                                          },
+  '27'  => { s => '0', icon => 'unknown',                           txtd => 'nach Graupel- oder Hagelschauer',                                          txte => 'after sleet or hail showers'                                                },
+  '28'  => { s => '0', icon => 'unknown',                           txtd => 'nach Nebel',                                                               txte => 'after fog'                                                                  },
+  '29'  => { s => '0', icon => 'unknown',                           txtd => 'nach Gewitter',                                                            txte => 'after thunderstorm'                                                         },
 
-  '30'  => { s => '0', icon => 'unknown',                  txtd => 'leichter oder mäßiger Sandsturm, an Intensität abnehmend',                 txte => 'light or moderate sandstorm, decreasing in intensity'                       },
-  '31'  => { s => '0', icon => 'unknown',                  txtd => 'leichter oder mäßiger Sandsturm, unveränderte Intensität',                 txte => 'light or moderate sandstorm, unchanged intensity'                           },
-  '32'  => { s => '0', icon => 'unknown',                  txtd => 'leichter oder mäßiger Sandsturm, an Intensität zunehmend',                 txte => 'light or moderate sandstorm, increasing in intensity'                       },
-  '33'  => { s => '0', icon => 'unknown',                  txtd => 'schwerer Sandsturm, an Intensität abnehmend',                              txte => 'heavy sandstorm, decreasing in intensity'                                   },
-  '34'  => { s => '0', icon => 'unknown',                  txtd => 'schwerer Sandsturm, unveränderte Intensität',                              txte => 'heavy sandstorm, unchanged intensity'                                       },
-  '35'  => { s => '0', icon => 'unknown',                  txtd => 'schwerer Sandsturm, an Intensität zunehmend',                              txte => 'heavy sandstorm, increasing in intensity'                                   },
-  '36'  => { s => '0', icon => 'weather_snow_light',       txtd => 'leichtes oder mäßiges Schneefegen, unter Augenhöhe',                       txte => 'light or moderate snow sweeping, below eye level'                           },
-  '37'  => { s => '0', icon => 'weather_snow_heavy',       txtd => 'starkes Schneefegen, unter Augenhöhe',                                     txte => 'heavy snow sweeping, below eye level'                                       },
-  '38'  => { s => '0', icon => 'weather_snow_light',       txtd => 'leichtes oder mäßiges Schneetreiben, über Augenhöhe',                      txte => 'light or moderate blowing snow, above eye level'                            },
-  '39'  => { s => '0', icon => 'weather_snow_heavy',       txtd => 'starkes Schneetreiben, über Augenhöhe',                                    txte => 'heavy snow drifting, above eye level'                                       },
+  '30'  => { s => '0', icon => 'unknown',                           txtd => 'leichter oder mäßiger Sandsturm, an Intensität abnehmend',                 txte => 'light or moderate sandstorm, decreasing in intensity'                       },
+  '31'  => { s => '0', icon => 'unknown',                           txtd => 'leichter oder mäßiger Sandsturm, unveränderte Intensität',                 txte => 'light or moderate sandstorm, unchanged intensity'                           },
+  '32'  => { s => '0', icon => 'unknown',                           txtd => 'leichter oder mäßiger Sandsturm, an Intensität zunehmend',                 txte => 'light or moderate sandstorm, increasing in intensity'                       },
+  '33'  => { s => '0', icon => 'unknown',                           txtd => 'schwerer Sandsturm, an Intensität abnehmend',                              txte => 'heavy sandstorm, decreasing in intensity'                                   },
+  '34'  => { s => '0', icon => 'unknown',                           txtd => 'schwerer Sandsturm, unveränderte Intensität',                              txte => 'heavy sandstorm, unchanged intensity'                                       },
+  '35'  => { s => '0', icon => 'unknown',                           txtd => 'schwerer Sandsturm, an Intensität zunehmend',                              txte => 'heavy sandstorm, increasing in intensity'                                   },
+  '36'  => { s => '0', icon => 'weather_snow_light',                txtd => 'leichtes oder mäßiges Schneefegen, unter Augenhöhe',                       txte => 'light or moderate snow sweeping, below eye level'                           },
+  '37'  => { s => '0', icon => 'weather_snow_heavy',                txtd => 'starkes Schneefegen, unter Augenhöhe',                                     txte => 'heavy snow sweeping, below eye level'                                       },
+  '38'  => { s => '0', icon => 'weather_snow_light',                txtd => 'leichtes oder mäßiges Schneetreiben, über Augenhöhe',                      txte => 'light or moderate blowing snow, above eye level'                            },
+  '39'  => { s => '0', icon => 'weather_snow_heavy',                txtd => 'starkes Schneetreiben, über Augenhöhe',                                    txte => 'heavy snow drifting, above eye level'                                       },
 
-  '40'  => { s => '0', icon => 'weather_fog',              txtd => 'Nebel in einiger Entfernung',                                              txte => 'Fog in some distance'                                                       },
-  '41'  => { s => '0', icon => 'weather_fog',              txtd => 'Nebel in Schwaden oder Bänken',                                            txte => 'Fog in swaths or banks'                                                     },
-  '42'  => { s => '0', icon => 'weather_fog',              txtd => 'Nebel, Himmel erkennbar, dünner werdend',                                  txte => 'Fog, sky recognizable, thinning'                                            },
-  '43'  => { s => '0', icon => 'weather_fog',              txtd => 'Nebel, Himmel nicht erkennbar, dünner werdend',                            txte => 'Fog, sky not recognizable, thinning'                                        },
-  '44'  => { s => '0', icon => 'weather_fog',              txtd => 'Nebel, Himmel erkennbar, unverändert',                                     txte => 'Fog, sky recognizable, unchanged'                                           },
-  '45'  => { s => '1', icon => 'weather_fog',              txtd => 'Nebel',                                                                    txte => 'Fog'                                                                        },
-  '46'  => { s => '0', icon => 'weather_fog',              txtd => 'Nebel, Himmel erkennbar, dichter werdend',                                 txte => 'Fog, sky recognizable, becoming denser'                                     },
-  '47'  => { s => '0', icon => 'weather_fog',              txtd => 'Nebel, Himmel nicht erkennbar, dichter werdend',                           txte => 'Fog, sky not visible, becoming denser'                                      },
-  '48'  => { s => '1', icon => 'weather_fog',              txtd => 'Nebel mit Reifbildung',                                                    txte => 'Fog with frost formation'                                                   },
-  '49'  => { s => '0', icon => 'weather_fog',              txtd => 'Nebel mit Reifansatz, Himmel nicht erkennbar',                             txte => 'Fog with frost, sky not visible'                                            },
+  '40'  => { s => '0', icon => 'weather_fog',                       txtd => 'Nebel in einiger Entfernung',                                              txte => 'Fog in some distance'                                                       },
+  '41'  => { s => '0', icon => 'weather_fog',                       txtd => 'Nebel in Schwaden oder Bänken',                                            txte => 'Fog in swaths or banks'                                                     },
+  '42'  => { s => '0', icon => 'weather_fog',                       txtd => 'Nebel, Himmel erkennbar, dünner werdend',                                  txte => 'Fog, sky recognizable, thinning'                                            },
+  '43'  => { s => '0', icon => 'weather_fog',                       txtd => 'Nebel, Himmel nicht erkennbar, dünner werdend',                            txte => 'Fog, sky not recognizable, thinning'                                        },
+  '44'  => { s => '0', icon => 'weather_fog',                       txtd => 'Nebel, Himmel erkennbar, unverändert',                                     txte => 'Fog, sky recognizable, unchanged'                                           },
+  '45'  => { s => '1', icon => 'weather_fog',                       txtd => 'Nebel',                                                                    txte => 'Fog'                                                                        },
+  '46'  => { s => '0', icon => 'weather_fog',                       txtd => 'Nebel, Himmel erkennbar, dichter werdend',                                 txte => 'Fog, sky recognizable, becoming denser'                                     },
+  '47'  => { s => '0', icon => 'weather_fog',                       txtd => 'Nebel, Himmel nicht erkennbar, dichter werdend',                           txte => 'Fog, sky not visible, becoming denser'                                      },
+  '48'  => { s => '1', icon => 'weather_fog',                       txtd => 'Nebel mit Reifbildung',                                                    txte => 'Fog with frost formation'                                                   },
+  '49'  => { s => '0', icon => 'weather_fog',                       txtd => 'Nebel mit Reifansatz, Himmel nicht erkennbar',                             txte => 'Fog with frost, sky not visible'                                            },
 
-  '50'  => { s => '0', icon => 'weather_rain',             txtd => 'unterbrochener leichter Sprühregen',                                       txte => 'intermittent light drizzle'                                                 },
-  '51'  => { s => '1', icon => 'weather_rain_light',       txtd => 'leichter Sprühregen',                                                      txte => 'light drizzle'                                                              },
-  '52'  => { s => '0', icon => 'weather_rain',             txtd => 'unterbrochener mäßiger Sprühregen',                                        txte => 'intermittent moderate drizzle'                                              },
-  '53'  => { s => '1', icon => 'weather_rain_light',       txtd => 'leichter Sprühregen',                                                      txte => 'light drizzle'                                                              },
-  '54'  => { s => '0', icon => 'weather_rain_heavy',       txtd => 'unterbrochener starker Sprühregen',                                        txte => 'intermittent heavy drizzle'                                                 },
-  '55'  => { s => '1', icon => 'weather_rain_heavy',       txtd => 'starker Sprühregen',                                                       txte => 'heavy drizzle'                                                              },
-  '56'  => { s => '1', icon => 'weather_rain_light',       txtd => 'leichter gefrierender Sprühregen',                                         txte => 'light freezing drizzle'                                                     },
-  '57'  => { s => '1', icon => 'weather_rain_heavy',       txtd => 'mäßiger oder starker gefrierender Sprühregen',                             txte => 'moderate or heavy freezing drizzle'                                         },
-  '58'  => { s => '0', icon => 'weather_rain_light',       txtd => 'leichter Sprühregen mit Regen',                                            txte => 'light drizzle with rain'                                                    },
-  '59'  => { s => '0', icon => 'weather_rain_heavy',       txtd => 'mäßiger oder starker Sprühregen mit Regen',                                txte => 'moderate or heavy drizzle with rain'                                        },
+  '50'  => { s => '0', icon => 'weather_rain',                      txtd => 'unterbrochener leichter Sprühregen',                                       txte => 'intermittent light drizzle'                                                 },
+  '51'  => { s => '1', icon => 'weather_rain_light',                txtd => 'leichter Sprühregen',                                                      txte => 'light drizzle'                                                              },
+  '52'  => { s => '0', icon => 'weather_rain',                      txtd => 'unterbrochener mäßiger Sprühregen',                                        txte => 'intermittent moderate drizzle'                                              },
+  '53'  => { s => '1', icon => 'weather_rain_light',                txtd => 'leichter Sprühregen',                                                      txte => 'light drizzle'                                                              },
+  '54'  => { s => '0', icon => 'weather_rain_heavy',                txtd => 'unterbrochener starker Sprühregen',                                        txte => 'intermittent heavy drizzle'                                                 },
+  '55'  => { s => '1', icon => 'weather_rain_heavy',                txtd => 'starker Sprühregen',                                                       txte => 'heavy drizzle'                                                              },
+  '56'  => { s => '1', icon => 'weather_rain_light',                txtd => 'leichter gefrierender Sprühregen',                                         txte => 'light freezing drizzle'                                                     },
+  '57'  => { s => '1', icon => 'weather_rain_heavy',                txtd => 'mäßiger oder starker gefrierender Sprühregen',                             txte => 'moderate or heavy freezing drizzle'                                         },
+  '58'  => { s => '0', icon => 'weather_rain_light',                txtd => 'leichter Sprühregen mit Regen',                                            txte => 'light drizzle with rain'                                                    },
+  '59'  => { s => '0', icon => 'weather_rain_heavy',                txtd => 'mäßiger oder starker Sprühregen mit Regen',                                txte => 'moderate or heavy drizzle with rain'                                        },
 
-  '60'  => { s => '0', icon => 'weather_rain_light',       txtd => 'unterbrochener leichter Regen oder einzelne Regentropfen',                 txte => 'intermittent light rain or single raindrops'                                },
-  '61'  => { s => '1', icon => 'weather_rain_light',       txtd => 'leichter Regen',                                                           txte => 'light rain'                                                                 },
-  '62'  => { s => '0', icon => 'weather_rain',             txtd => 'unterbrochener mäßiger Regen',                                             txte => 'intermittent moderate rain'                                                 },
-  '63'  => { s => '1', icon => 'weather_rain',             txtd => 'mäßiger Regen',                                                            txte => 'moderate rain'                                                              },
-  '64'  => { s => '0', icon => 'weather_rain_heavy',       txtd => 'unterbrochener starker Regen',                                             txte => 'intermittent heavy rain'                                                    },
-  '65'  => { s => '1', icon => 'weather_rain_heavy',       txtd => 'starker Regen',                                                            txte => 'heavy rain'                                                                 },
-  '66'  => { s => '1', icon => 'weather_rain_snow_light',  txtd => 'leichter gefrierender Regen',                                              txte => 'light freezing rain'                                                        },
-  '67'  => { s => '1', icon => 'weather_rain_snow_heavy',  txtd => 'mäßiger oder starker gefrierender Regen',                                  txte => 'moderate or heavy freezing rain'                                            },
-  '68'  => { s => '0', icon => 'weather_rain_snow_light',  txtd => 'leichter Schneeregen',                                                     txte => 'light sleet'                                                                },
-  '69'  => { s => '0', icon => 'weather_rain_snow_heavy',  txtd => 'mäßiger oder starker Schneeregen',                                         txte => 'moderate or heavy sleet'                                                    },
+  '60'  => { s => '0', icon => 'weather_rain_light',                txtd => 'unterbrochener leichter Regen oder einzelne Regentropfen',                 txte => 'intermittent light rain or single raindrops'                                },
+  '61'  => { s => '1', icon => 'weather_rain_light',                txtd => 'leichter Regen',                                                           txte => 'light rain'                                                                 },
+  '62'  => { s => '0', icon => 'weather_rain',                      txtd => 'unterbrochener mäßiger Regen',                                             txte => 'intermittent moderate rain'                                                 },
+  '63'  => { s => '1', icon => 'weather_rain',                      txtd => 'mäßiger Regen',                                                            txte => 'moderate rain'                                                              },
+  '64'  => { s => '0', icon => 'weather_rain_heavy',                txtd => 'unterbrochener starker Regen',                                             txte => 'intermittent heavy rain'                                                    },
+  '65'  => { s => '1', icon => 'weather_rain_heavy',                txtd => 'starker Regen',                                                            txte => 'heavy rain'                                                                 },
+  '66'  => { s => '1', icon => 'weather_rain_snow_light',           txtd => 'leichter gefrierender Regen',                                              txte => 'light freezing rain'                                                        },
+  '67'  => { s => '1', icon => 'weather_rain_snow_heavy',           txtd => 'mäßiger oder starker gefrierender Regen',                                  txte => 'moderate or heavy freezing rain'                                            },
+  '68'  => { s => '0', icon => 'weather_rain_snow_light',           txtd => 'leichter Schneeregen',                                                     txte => 'light sleet'                                                                },
+  '69'  => { s => '0', icon => 'weather_rain_snow_heavy',           txtd => 'mäßiger oder starker Schneeregen',                                         txte => 'moderate or heavy sleet'                                                    },
 
-  '70'  => { s => '0', icon => 'weather_snow_light',       txtd => 'unterbrochener leichter Schneefall oder einzelne Schneeflocken',           txte => 'intermittent light snowfall or single snowflakes'                           },
-  '71'  => { s => '1', icon => 'weather_snow_light',       txtd => 'leichter Schneefall',                                                      txte => 'light snowfall'                                                             },
-  '72'  => { s => '0', icon => 'weather_snow',             txtd => 'unterbrochener mäßiger Schneefall',                                        txte => 'intermittent moderate snowfall'                                             },
-  '73'  => { s => '1', icon => 'weather_snow',             txtd => 'mäßiger Schneefall',                                                       txte => 'moderate snowfall'                                                          },
-  '74'  => { s => '0', icon => 'weather_snow_heavy',       txtd => 'unterbrochener starker Schneefall',                                        txte => 'intermittent heavy snowfall'                                                },
-  '75'  => { s => '1', icon => 'weather_snow_heavy',       txtd => 'starker Schneefall',                                                       txte => 'heavy snowfall'                                                             },
-  '76'  => { s => '0', icon => 'weather_frost',            txtd => 'Eisnadeln (Polarschnee)',                                                  txte => 'Ice needles (polar snow)'                                                   },
-  '77'  => { s => '1', icon => 'weather_frost',            txtd => 'Schneegriesel',                                                            txte => 'Snow drizzle'                                                               },
-  '78'  => { s => '0', icon => 'weather_frost',            txtd => 'Schneekristalle',                                                          txte => 'Snow crystals'                                                              },
-  '79'  => { s => '0', icon => 'weather_frost',            txtd => 'Eiskörner (gefrorene Regentropfen)',                                       txte => 'Ice grains (frozen raindrops)'                                              },
+  '70'  => { s => '0', icon => 'weather_snow_light',                txtd => 'unterbrochener leichter Schneefall oder einzelne Schneeflocken',           txte => 'intermittent light snowfall or single snowflakes'                           },
+  '71'  => { s => '1', icon => 'weather_snow_light',                txtd => 'leichter Schneefall',                                                      txte => 'light snowfall'                                                             },
+  '72'  => { s => '0', icon => 'weather_snow',                      txtd => 'unterbrochener mäßiger Schneefall',                                        txte => 'intermittent moderate snowfall'                                             },
+  '73'  => { s => '1', icon => 'weather_snow',                      txtd => 'mäßiger Schneefall',                                                       txte => 'moderate snowfall'                                                          },
+  '74'  => { s => '0', icon => 'weather_snow_heavy',                txtd => 'unterbrochener starker Schneefall',                                        txte => 'intermittent heavy snowfall'                                                },
+  '75'  => { s => '1', icon => 'weather_snow_heavy',                txtd => 'starker Schneefall',                                                       txte => 'heavy snowfall'                                                             },
+  '76'  => { s => '0', icon => 'weather_frost',                     txtd => 'Eisnadeln (Polarschnee)',                                                  txte => 'Ice needles (polar snow)'                                                   },
+  '77'  => { s => '1', icon => 'weather_frost',                     txtd => 'Schneegriesel',                                                            txte => 'Snow drizzle'                                                               },
+  '78'  => { s => '0', icon => 'weather_frost',                     txtd => 'Schneekristalle',                                                          txte => 'Snow crystals'                                                              },
+  '79'  => { s => '0', icon => 'weather_frost',                     txtd => 'Eiskörner (gefrorene Regentropfen)',                                       txte => 'Ice grains (frozen raindrops)'                                              },
 
-  '80'  => { s => '1', icon => 'weather_rain_light',       txtd => 'leichter Regenschauer',                                                    txte => 'light rain shower'                                                          },
-  '81'  => { s => '1', icon => 'weather_rain',             txtd => 'mäßiger oder starker Regenschauer',                                        txte => 'moderate or heavy rain shower'                                              },
-  '82'  => { s => '1', icon => 'weather_rain_heavy',       txtd => 'sehr starker Regenschauer',                                                txte => 'very heavy rain shower'                                                     },
-  '83'  => { s => '0', icon => 'weather_snow',             txtd => 'mäßiger oder starker Schneeregenschauer',                                  txte => 'moderate or heavy sleet shower'                                             },
-  '84'  => { s => '0', icon => 'weather_snow_light',       txtd => 'leichter Schneeschauer',                                                   txte => 'light snow shower'                                                          },
-  '85'  => { s => '1', icon => 'weather_snow_light',       txtd => 'leichter Schneeschauer',                                                   txte => 'light snow shower'                                                          },
-  '86'  => { s => '1', icon => 'weather_snow_heavy',       txtd => 'mäßiger oder starker Schneeschauer',                                       txte => 'moderate or heavy snow shower'                                              },
-  '87'  => { s => '0', icon => 'weather_snow_heavy',       txtd => 'mäßiger oder starker Graupelschauer',                                      txte => 'moderate or heavy sleet shower'                                             },
-  '88'  => { s => '0', icon => 'unknown',                  txtd => 'leichter Hagelschauer',                                                    txte => 'light hailstorm'                                                            },
-  '89'  => { s => '0', icon => 'unknown',                  txtd => 'mäßiger oder starker Hagelschauer',                                        txte => 'moderate or heavy hailstorm'                                                },
+  '80'  => { s => '1', icon => 'weather_rain_light',                txtd => 'leichter Regenschauer',                                                    txte => 'light rain shower'                                                          },
+  '81'  => { s => '1', icon => 'weather_rain',                      txtd => 'mäßiger oder starker Regenschauer',                                        txte => 'moderate or heavy rain shower'                                              },
+  '82'  => { s => '1', icon => 'weather_rain_heavy',                txtd => 'sehr starker Regenschauer',                                                txte => 'very heavy rain shower'                                                     },
+  '83'  => { s => '0', icon => 'weather_snow',                      txtd => 'mäßiger oder starker Schneeregenschauer',                                  txte => 'moderate or heavy sleet shower'                                             },
+  '84'  => { s => '0', icon => 'weather_snow_light',                txtd => 'leichter Schneeschauer',                                                   txte => 'light snow shower'                                                          },
+  '85'  => { s => '1', icon => 'weather_snow_light',                txtd => 'leichter Schneeschauer',                                                   txte => 'light snow shower'                                                          },
+  '86'  => { s => '1', icon => 'weather_snow_heavy',                txtd => 'mäßiger oder starker Schneeschauer',                                       txte => 'moderate or heavy snow shower'                                              },
+  '87'  => { s => '0', icon => 'weather_snow_heavy',                txtd => 'mäßiger oder starker Graupelschauer',                                      txte => 'moderate or heavy sleet shower'                                             },
+  '88'  => { s => '0', icon => 'unknown',                           txtd => 'leichter Hagelschauer',                                                    txte => 'light hailstorm'                                                            },
+  '89'  => { s => '0', icon => 'weather_sleet',                     txtd => 'mäßiger oder starker Hagelschauer',                                        txte => 'moderate or heavy hailstorm'                                                },
 
-  '90'  => { s => '0', icon => 'weather_thunderstorm',     txtd => '',                                                                         txte => ''                                                                           },
-  '91'  => { s => '0', icon => 'weather_storm',            txtd => '',                                                                         txte => ''                                                                           },
-  '92'  => { s => '0', icon => 'weather_thunderstorm',     txtd => '',                                                                         txte => ''                                                                           },
-  '93'  => { s => '0', icon => 'weather_thunderstorm',     txtd => '',                                                                         txte => ''                                                                           },
-  '94'  => { s => '0', icon => 'weather_thunderstorm',     txtd => '',                                                                         txte => ''                                                                           },
-  '95'  => { s => '1', icon => 'weather_thunderstorm',     txtd => 'leichtes oder mäßiges Gewitter ohne Graupel oder Hagel',                   txte => 'light or moderate thunderstorm without sleet or hail'                       },
-  '96'  => { s => '1', icon => 'weather_storm',            txtd => 'starkes Gewitter ohne Graupel oder Hagel,Gewitter mit Graupel oder Hagel', txte => 'strong thunderstorm without sleet or hail,thunderstorm with sleet or hail'  },
-  '97'  => { s => '0', icon => 'weather_storm',            txtd => 'starkes Gewitter mit Regen oder Schnee',                                   txte => 'heavy thunderstorm with rain or snow'                                       },
-  '98'  => { s => '0', icon => 'weather_storm',            txtd => 'starkes Gewitter mit Sandsturm',                                           txte => 'strong thunderstorm with sandstorm'                                         },
-  '99'  => { s => '1', icon => 'weather_storm',            txtd => 'starkes Gewitter mit Graupel oder Hagel',                                  txte => 'strong thunderstorm with sleet or hail'                                     },
-  '100' => { s => '0', icon => 'weather_night',            txtd => 'sternenklarer Himmel',                                                     txte => 'starry sky'                                                                 },
+  '90'  => { s => '0', icon => 'weather_storm',                     txtd => 'starke Hagelschauer ohne Gewitter',                                        txte => 'heavy hail showers without thunderstorms'                                   },
+  '91'  => { s => '0', icon => 'weather_rain_light',                txtd => 'leichter Regen, letzte Stunde Gewitter hörbar',                            txte => 'light rain, last hour thunderstorm audible'                                 },
+  '92'  => { s => '0', icon => 'weather_rain_heavy',                txtd => 'starker Regen, letzte Stunde Gewitter hörbar',                             txte => 'heavy rain, last hour thunderstorm audible'                                 },
+  '93'  => { s => '0', icon => 'weather_rain_snow_light',           txtd => 'leichter Schnee oder Regen-Hagel, letzte Stunde Gewitter hörbar',          txte => 'light snow or rain hail, thunderstorms audible for the last hour'           },
+  '94'  => { s => '0', icon => 'weather_rain_snow_heavy',           txtd => 'starker Schnee oder Regen-Hagel, letzte Stunde Gewitter hörbar',           txte => 'heavy snow or rain hail, thunderstorm audible for the last hour'            },
+  '95'  => { s => '1', icon => 'weather_thunderstorm',              txtd => 'leichtes oder mäßiges Gewitter mit Regen oder Schnee',                     txte => 'light or moderate thunderstorm with rain or snow'                           },
+  '96'  => { s => '1', icon => 'weather_thunderstorm',              txtd => 'leichtes oder mäßiges Gewitter mit Hagel',                                 txte => 'light or moderate thunderstorm with hail'                                   },
+  '97'  => { s => '0', icon => 'weather_thunderstorm',              txtd => 'schweres Gewitter mit Regen oder Schnee',                                  txte => 'heavy thunderstorm with rain or snow'                                       },
+  '98'  => { s => '0', icon => 'weather_thunderstorm',              txtd => 'Gewitter mit Sandsturm',                                                   txte => 'Thunderstorm with sandstorm'                                                },
+  '99'  => { s => '1', icon => 'weather_thunderstorm',              txtd => 'Gewitter mit Graupel oder Hagel',                                          txte => 'Thunderstorm with sleet or hail'                                            },
+  
+  '100' => { s => '0', icon => 'weather_night_starry',              txtd => 'sternenklarer Himmel',                                                     txte => 'starry sky'                                                                 },
+  '101' => { s => '0', icon => 'weather_night_cloudy_light',        txtd => 'Bewölkung abnehmend',                                                      txte => 'Cloudiness decreasing'                                                      },
+  '102' => { s => '0', icon => 'weather_night_cloudy',              txtd => 'Bewölkung unverändert',                                                    txte => 'Cloudiness unchanged'                                                       },
+  '103' => { s => '0', icon => 'weather_night_cloudy_heavy',        txtd => 'Bewölkung zunehmend',                                                      txte => 'Cloudiness increasing'                                                      },
+  '110' => { s => '0', icon => 'weather_night_fog',                 txtd => 'Nebel',                                                                    txte => 'Fog'                                                                        },
+  '111' => { s => '0', icon => 'weather_night_rain_fog',            txtd => 'Nebel mit Regen',                                                          txte => 'Fog with rain'                                                              },
+  '112' => { s => '0', icon => 'weather_night_fog',                 txtd => 'durchgehender Bodennebel',                                                 txte => 'continuous ground fog'                                                      },
+  
+  '136' => { s => '0', icon => 'weather_night_snow_light',          txtd => 'leichtes oder mäßiges Schneefegen, unter Augenhöhe',                       txte => 'light or moderate snow sweeping, below eye level'                           },
+  '137' => { s => '0', icon => 'weather_night_snow_heavy',          txtd => 'starkes Schneefegen, unter Augenhöhe',                                     txte => 'heavy snow sweeping, below eye level'                                       },
+  '138' => { s => '0', icon => 'weather_night_snow_light',          txtd => 'leichtes oder mäßiges Schneetreiben, über Augenhöhe',                      txte => 'light or moderate blowing snow, above eye level'                            },
+  '139' => { s => '0', icon => 'weather_night_snow_heavy',          txtd => 'starkes Schneetreiben, über Augenhöhe',                                    txte => 'heavy snow drifting, above eye level'                                       },
+  
+  '140' => { s => '0', icon => 'weather_night_fog',                 txtd => 'Nebel in einiger Entfernung',                                              txte => 'Fog in some distance'                                                       },
+  '141' => { s => '0', icon => 'weather_night_fog',                 txtd => 'Nebel in Schwaden oder Bänken',                                            txte => 'Fog in swaths or banks'                                                     },
+  '142' => { s => '0', icon => 'weather_night_fog',                 txtd => 'Nebel, Himmel erkennbar, dünner werdend',                                  txte => 'Fog, sky recognizable, thinning'                                            },
+  '143' => { s => '0', icon => 'weather_night_fog',                 txtd => 'Nebel, Himmel nicht erkennbar, dünner werdend',                            txte => 'Fog, sky not recognizable, thinning'                                        },
+  '144' => { s => '0', icon => 'weather_night_fog',                 txtd => 'Nebel, Himmel erkennbar, unverändert',                                     txte => 'Fog, sky recognizable, unchanged'                                           },
+  '145' => { s => '1', icon => 'weather_night_fog',                 txtd => 'Nebel',                                                                    txte => 'Fog'                                                                        },
+  '146' => { s => '0', icon => 'weather_night_fog',                 txtd => 'Nebel, Himmel erkennbar, dichter werdend',                                 txte => 'Fog, sky recognizable, becoming denser'                                     },
+  '147' => { s => '0', icon => 'weather_night_fog',                 txtd => 'Nebel, Himmel nicht erkennbar, dichter werdend',                           txte => 'Fog, sky not visible, becoming denser'                                      },
+  '148' => { s => '1', icon => 'weather_night_fog',                 txtd => 'Nebel mit Reifbildung',                                                    txte => 'Fog with frost formation'                                                   },
+  '149' => { s => '0', icon => 'weather_night_fog',                 txtd => 'Nebel mit Reifansatz, Himmel nicht erkennbar',                             txte => 'Fog with frost, sky not visible'                                            },
+
+  '150' => { s => '0', icon => 'weather_night_rain',                txtd => 'unterbrochener leichter Sprühregen',                                       txte => 'intermittent light drizzle'                                                 },
+  '151' => { s => '1', icon => 'weather_night_rain_light',          txtd => 'leichter Sprühregen',                                                      txte => 'light drizzle'                                                              },
+  '152' => { s => '0', icon => 'weather_night_rain',                txtd => 'unterbrochener mäßiger Sprühregen',                                        txte => 'intermittent moderate drizzle'                                              },
+  '153' => { s => '1', icon => 'weather_night_rain_light',          txtd => 'leichter Sprühregen',                                                      txte => 'light drizzle'                                                              },
+  '154' => { s => '0', icon => 'weather_night_rain_heavy',          txtd => 'unterbrochener starker Sprühregen',                                        txte => 'intermittent heavy drizzle'                                                 },
+  '155' => { s => '1', icon => 'weather_night_rain_heavy',          txtd => 'starker Sprühregen',                                                       txte => 'heavy drizzle'                                                              },
+  '156' => { s => '1', icon => 'weather_night_rain_light',          txtd => 'leichter gefrierender Sprühregen',                                         txte => 'light freezing drizzle'                                                     },
+  '157' => { s => '1', icon => 'weather_night_rain_heavy',          txtd => 'mäßiger oder starker gefrierender Sprühregen',                             txte => 'moderate or heavy freezing drizzle'                                         },
+  '158' => { s => '0', icon => 'weather_night_rain_light',          txtd => 'leichter Sprühregen mit Regen',                                            txte => 'light drizzle with rain'                                                    },
+  '159' => { s => '0', icon => 'weather_night_rain_heavy',          txtd => 'mäßiger oder starker Sprühregen mit Regen',                                txte => 'moderate or heavy drizzle with rain'                                        },
+
+  '160' => { s => '0', icon => 'weather_night_rain_light',          txtd => 'unterbrochener leichter Regen oder einzelne Regentropfen',                 txte => 'intermittent light rain or single raindrops'                                },
+  '161' => { s => '1', icon => 'weather_night_rain_light',          txtd => 'leichter Regen',                                                           txte => 'light rain'                                                                 },
+  '162' => { s => '0', icon => 'weather_night_rain',                txtd => 'unterbrochener mäßiger Regen',                                             txte => 'intermittent moderate rain'                                                 },
+  '163' => { s => '1', icon => 'weather_night_rain',                txtd => 'mäßiger Regen',                                                            txte => 'moderate rain'                                                              },
+  '164' => { s => '0', icon => 'weather_night_rain_heavy   ',       txtd => 'unterbrochener starker Regen',                                             txte => 'intermittent heavy rain'                                                    },
+  '165' => { s => '1', icon => 'weather_night_rain_heavy',          txtd => 'starker Regen',                                                            txte => 'heavy rain'                                                                 },
+  '166' => { s => '1', icon => 'weather_night_snow_rain_light',     txtd => 'leichter gefrierender Regen',                                              txte => 'light freezing rain'                                                        },
+  '167' => { s => '1', icon => 'weather_night_snow_rain_heavy',     txtd => 'mäßiger oder starker gefrierender Regen',                                  txte => 'moderate or heavy freezing rain'                                            },
+  '168' => { s => '0', icon => 'weather_night_snow_rain_light',     txtd => 'leichter Schneeregen',                                                     txte => 'light sleet'                                                                },
+  '169' => { s => '0', icon => 'weather_night_snow_rain_heavy',     txtd => 'mäßiger oder starker Schneeregen',                                         txte => 'moderate or heavy sleet'                                                    },
+
+  '170' => { s => '0', icon => 'weather_night_snow_light',          txtd => 'unterbrochener leichter Schneefall oder einzelne Schneeflocken',           txte => 'intermittent light snowfall or single snowflakes'                           },
+  '171' => { s => '1', icon => 'weather_night_snow_light',          txtd => 'leichter Schneefall',                                                      txte => 'light snowfall'                                                             },
+  '172' => { s => '0', icon => 'weather_night_snow',                txtd => 'unterbrochener mäßiger Schneefall',                                        txte => 'intermittent moderate snowfall'                                             },
+  '173' => { s => '1', icon => 'weather_night_snow',                txtd => 'mäßiger Schneefall',                                                       txte => 'moderate snowfall'                                                          },
+  '174' => { s => '0', icon => 'weather_night_snow_heavy',          txtd => 'unterbrochener starker Schneefall',                                        txte => 'intermittent heavy snowfall'                                                },
+  '175' => { s => '1', icon => 'weather_night_snow_heavy',          txtd => 'starker Schneefall',                                                       txte => 'heavy snowfall'                                                             },
+  '176' => { s => '0', icon => 'weather_frost',                     txtd => 'Eisnadeln (Polarschnee)',                                                  txte => 'Ice needles (polar snow)'                                                   },
+  '177' => { s => '1', icon => 'weather_frost',                     txtd => 'Schneegriesel',                                                            txte => 'Snow drizzle'                                                               },
+  '178' => { s => '0', icon => 'weather_frost',                     txtd => 'Schneekristalle',                                                          txte => 'Snow crystals'                                                              },
+  '179' => { s => '0', icon => 'weather_frost',                     txtd => 'Eiskörner (gefrorene Regentropfen)',                                       txte => 'Ice grains (frozen raindrops)'                                              },
+
+  '180' => { s => '1', icon => 'weather_night_rain_light',          txtd => 'leichter Regenschauer',                                                    txte => 'light rain shower'                                                          },
+  '181' => { s => '1', icon => 'weather_night_rain',                txtd => 'mäßiger oder starker Regenschauer',                                        txte => 'moderate or heavy rain shower'                                              },
+  '182' => { s => '1', icon => 'weather_night_rain_heavy',          txtd => 'sehr starker Regenschauer',                                                txte => 'very heavy rain shower'                                                     },
+  '183' => { s => '0', icon => 'weather_night_snow',                txtd => 'mäßiger oder starker Schneeregenschauer',                                  txte => 'moderate or heavy sleet shower'                                             },
+  '184' => { s => '0', icon => 'weather_night_snow_light',          txtd => 'leichter Schneeschauer',                                                   txte => 'light snow shower'                                                          },
+  '185' => { s => '1', icon => 'weather_night_snow_light',          txtd => 'leichter Schneeschauer',                                                   txte => 'light snow shower'                                                          },
+  '186' => { s => '1', icon => 'weather_night_snow_heavy',          txtd => 'mäßiger oder starker Schneeschauer',                                       txte => 'moderate or heavy snow shower'                                              },
+  '187' => { s => '0', icon => 'weather_night_snow_heavy',          txtd => 'mäßiger oder starker Graupelschauer',                                      txte => 'moderate or heavy sleet shower'                                             },
+  '189' => { s => '0', icon => 'weather_sleet',                     txtd => 'mäßiger oder starker Hagelschauer',                                        txte => 'moderate or heavy hailstorm'                                                },
+
+  '190' => { s => '0', icon => 'weather_storm',                     txtd => 'starke Hagelschauer ohne Gewitter',                                        txte => 'heavy hail showers without thunderstorms'                                   },
+  '191' => { s => '0', icon => 'weather_night_rain_light',          txtd => 'leichter Regen, letzte Stunde Gewitter hörbar',                            txte => 'light rain, last hour thunderstorm audible'                                 },
+  '192' => { s => '0', icon => 'weather_night_rain_heavy',          txtd => 'starker Regen, letzte Stunde Gewitter hörbar',                             txte => 'heavy rain, last hour thunderstorm audible'                                 },
+  '193' => { s => '0', icon => 'weather_night_snow_rain_light',     txtd => 'leichter Schnee oder Regen-Hagel, letzte Stunde Gewitter hörbar',          txte => 'light snow or rain hail, thunderstorms audible for the last hour'           },
+  '194' => { s => '0', icon => 'weather_night_snow_rain_heavy',     txtd => 'starker Schnee oder Regen-Hagel, letzte Stunde Gewitter hörbar',           txte => 'heavy snow or rain hail, thunderstorm audible for the last hour'            },
+  '195' => { s => '1', icon => 'weather_night_thunderstorm_light',  txtd => 'leichtes oder mäßiges Gewitter mit Regen oder Schnee',                     txte => 'light or moderate thunderstorm with rain or snow'                           },
+  '196' => { s => '1', icon => 'weather_night_thunderstorm_light',  txtd => 'leichtes oder mäßiges Gewitter mit Hagel',                                 txte => 'light or moderate thunderstorm with hail'                                   },
+  '197' => { s => '0', icon => 'weather_night_thunderstorm',        txtd => 'schweres Gewitter mit Regen oder Schnee',                                  txte => 'heavy thunderstorm with rain or snow'                                       },
+  '198' => { s => '0', icon => 'weather_night_thunderstorm',        txtd => 'Gewitter mit Sandsturm',                                                   txte => 'Thunderstorm with sandstorm'                                                },
+  '199' => { s => '1', icon => 'weather_night_thunderstorm',        txtd => 'Gewitter mit Graupel oder Hagel',                                          txte => 'Thunderstorm with sleet or hail'                                            },
 );
 
 my %hef = (                                                                      # Energiedaktoren für Verbrauchertypen
   "heater"         => { f => 1.00, m => 1.00, l => 1.00, mt => 240         },
-  "other"          => { f => 1.00, m => 1.00, l => 1.00, mt => $defmintime },    # f   = Faktor Energieverbrauch in erster Stunde (wichtig auch für Kalkulation in __calcEnergyPieces !)
+  "other"          => { f => 1.00, m => 1.00, l => 1.00, mt => DEFMINTIME  },    # f   = Faktor Energieverbrauch in erster Stunde (wichtig auch für Kalkulation in __calcEnergyPieces !)
   "charger"        => { f => 1.00, m => 1.00, l => 1.00, mt => 120         },    # m   = Faktor Energieverbrauch zwischen erster und letzter Stunde
   "dishwasher"     => { f => 0.45, m => 0.10, l => 0.45, mt => 180         },    # l   = Faktor Energieverbrauch in letzter Stunde
   "dryer"          => { f => 0.40, m => 0.40, l => 0.20, mt => 90          },    # mt  = default mintime (Minuten)
   "washingmachine" => { f => 0.50, m => 0.30, l => 0.40, mt => 120         },
-  "noSchedule"     => { f => 1.00, m => 1.00, l => 1.00, mt => $defmintime },
+  "noSchedule"     => { f => 1.00, m => 1.00, l => 1.00, mt => DEFMINTIME  },
 );
 
 my %hcsr = (                                                                                                                                 # Funktiontemplate zur Erstellung optionaler Statistikreadings
@@ -1156,12 +1232,13 @@ my %hcsr = (                                                                    
   todayDoneAPIrequests        => { fnr => 1, fn => \&StatusAPIVal,    par => '',                  unit => '',     def => 0           },
   todayRemainingAPIcalls      => { fnr => 1, fn => \&StatusAPIVal,    par => '',                  unit => '',     def => 'apimaxreq' },
   todayRemainingAPIrequests   => { fnr => 1, fn => \&StatusAPIVal,    par => '',                  unit => '',     def => 'apimaxreq' },
-  runTimeCentralTask          => { fnr => 2, fn => \&CurrentVal,      par => '',                  unit => '',     def => '-'         },
+  runTimeCentralTask          => { fnr => 2, fn => \&CurrentVal,      par => '',                  unit => ' s',   def => '-'         },
   runTimeLastAPIAnswer        => { fnr => 2, fn => \&CurrentVal,      par => '',                  unit => '',     def => '-'         },
   runTimeLastAPIProc          => { fnr => 2, fn => \&CurrentVal,      par => '',                  unit => '',     def => '-'         },
   allStringsFullfilled        => { fnr => 2, fn => \&CurrentVal,      par => '',                  unit => '',     def => 0           },
   todayConForecastTillSunset  => { fnr => 2, fn => \&CurrentVal,      par => 'tdConFcTillSunset', unit => ' Wh',  def => 0           },
-  runTimeTrainAI              => { fnr => 3, fn => \&CircularVal,     par => 99,                  unit => '',     def => '-'         },
+  runTimeTrainAI              => { fnr => 3, fn => \&CircularVal,     par => 99,                  unit => ' s',   def => '-'         },
+  todayConsumption            => { fnr => 3, fn => \&CircularVal,     par => 99,                  unit => ' Wh',  def => 0           },
   BatPowerIn_Sum              => { fnr => 4, fn => \&CurrentVal,      par => 'batpowerinsum',     unit => ' W',   def => '-'         },
   BatPowerOut_Sum             => { fnr => 4, fn => \&CurrentVal,      par => 'batpoweroutsum',    unit => ' W',   def => '-'         }, 
   SunHours_Remain             => { fnr => 4, fn => \&CurrentVal,      par => '',                  unit => '',     def => 0           },      # fnr => 3 -> Custom Calc
@@ -1175,7 +1252,7 @@ my %hcsr = (                                                                    
   todayBatOutSum              => { fnr => 4, fn => \&CircularVal,     par => 99,                  unit => ' Wh',  def => 0           },
 );
 
-  for my $csr (1..$maxconsumer) {
+  for my $csr (1..MAXCONSUMER) {
       $csr                                       = sprintf "%02d", $csr;
 
       $hcsr{'currentRunMtsConsumer_'.$csr}{fnr}  = 4;
@@ -1191,7 +1268,7 @@ my %hcsr = (                                                                    
       $hcsr{'runTimeAvgDayConsumer_'.$csr}{def}  = 0;
   }
   
-  for my $bn (1..$maxbatteries) {
+  for my $bn (1..MAXBATTERIES) {
       $bn                                      = sprintf "%02d", $bn;
       
       $hcsr{'daysUntilBatteryCare_'.$bn}{fnr}  = 4;
@@ -1238,7 +1315,7 @@ my %hfspvh = (
   pvrl              => { fn => \&_storeVal, storname => 'pvrl',         validkey => 'pvrlvd', fpar => 'comp99' },    # realer Energieertrag PV
 );
 
-  for my $in (1..$maxinverter) {
+  for my $in (1..MAXINVERTER) {
       $in                              = sprintf "%02d", $in;
       $hfspvh{'pvrl'.$in}{fn}          = \&_storeVal;                         # realer Energieertrag Inverter
       $hfspvh{'pvrl'.$in}{storname}    = 'pvrl'.$in;
@@ -1251,7 +1328,7 @@ my %hfspvh = (
       $hfspvh{'etotali'.$in}{fpar}     = undef;
   }
   
-  for my $pn (1..$maxproducer) {
+  for my $pn (1..MAXPRODUCER) {
       $pn                              = sprintf "%02d", $pn;
       $hfspvh{'pprl'.$pn}{fn}          = \&_storeVal;                         # realer Energieertrag sonstiger Erzeuger
       $hfspvh{'pprl'.$pn}{storname}    = 'pprl'.$pn;
@@ -1264,7 +1341,7 @@ my %hfspvh = (
       $hfspvh{'etotalp'.$pn}{fpar}     = undef;
   }
   
-  for my $bn (1..$maxbatteries) {
+  for my $bn (1..MAXBATTERIES) {
       $bn                                     = sprintf "%02d", $bn;
       $hfspvh{'batintotal'.$bn}{fn}           = \&_storeVal;                  # totale Batterieladung
       $hfspvh{'batintotal'.$bn}{storname}     = 'batintotal'.$bn;
@@ -1340,24 +1417,24 @@ sub Initialize {
   my $srd = join ",", sort keys (%hcsr);
 
   my ($consumer, $setupbat, $ctrlbatsm, $setupprod, $setupinv, @allc);
-  for my $c (1..$maxconsumer) {
+  for my $c (1..MAXCONSUMER) {
       $c         = sprintf "%02d", $c;
       $consumer .= "consumer${c}:textField-long ";
       push @allc, $c;
   }
   
-  for my $bn (1..$maxbatteries) {
+  for my $bn (1..MAXBATTERIES) {
       $bn         = sprintf "%02d", $bn;
       $setupbat  .= "setupBatteryDev${bn}:textField-long ";
       $ctrlbatsm .= "ctrlBatSocManagement${bn}:textField-long ";
   }
 
-  for my $in (1..$maxinverter) {
+  for my $in (1..MAXINVERTER) {
       $in        = sprintf "%02d", $in;
       $setupinv .= "setupInverterDev${in}:textField-long ";
   }
   
-  for my $prn (1..$maxproducer) {
+  for my $prn (1..MAXPRODUCER) {
       $prn        = sprintf "%02d", $prn;
       $setupprod .= "setupOtherProducer${prn}:textField-long ";
   }
@@ -1505,7 +1582,7 @@ sub Define {
   singleUpdateState    ( {hash => $hash, state => 'initialized', evt => 1} );
 
   $readyfnlist{$name} = $hash;                                                                                                   # Registrierung in Ready-Schleife
-  InternalTimer (gettimeofday() + $whistrepeat  + int(rand(300)), "FHEM::SolarForecast::periodicWriteMemcache",     $hash, 0);   # Einstieg periodisches Schreiben historische Daten
+  InternalTimer (gettimeofday() + WHISTREPEAT  + int(rand(300)), "FHEM::SolarForecast::periodicWriteMemcache",     $hash, 0);   # Einstieg periodisches Schreiben historische Daten
   InternalTimer (gettimeofday() + 120           + int(rand(300)), "FHEM::SolarForecast::getMessageFileNonBlocking", $hash, 0);
   
 return;
@@ -1663,7 +1740,7 @@ sub _setconsumerImmediatePlanning {      ## no critic "not used"
   return qq{no consumer number specified} if(!$c);
   return qq{no valid consumer id "$c"}    if(!ConsumerVal ($hash, $c, "name", ""));
 
-  if (ConsumerVal ($hash, $c, 'type', $defctype) eq 'noSchedule') {
+  if (ConsumerVal ($hash, $c, 'type', DEFCTYPE) eq 'noSchedule') {
       debugLog ($paref, "consumerPlanning", qq{consumer "$c" - }.$hqtxt{scnp}{EN});
 
       $paref->{ps}       = 'noSchedule';
@@ -1677,7 +1754,7 @@ sub _setconsumerImmediatePlanning {      ## no critic "not used"
   }
 
   my $startts  = time;
-  my $mintime  = ConsumerVal ($hash, $c, "mintime", $defmintime);
+  my $mintime  = ConsumerVal ($hash, $c, "mintime", DEFMINTIME);
 
   if (isSunPath ($hash, $c)) {                                                                 # SunPath ist in mintime gesetzt
       my (undef, $setshift) = sunShift   ($hash, $c);                                          # Verschiebung (Sekunden) Sonnenuntergang bei SunPath Verwendung
@@ -2449,7 +2526,7 @@ sub _setaiDecTree {                   ## no critic "not used"
   my $prop  = $paref->{prop} // return;
 
   if ($prop eq 'addInstances') {
-      aiAddInstance ($paref);
+      aiAddInstancePV ($paref);
   }
 
   if ($prop eq 'addRawData') {
@@ -2527,15 +2604,21 @@ sub Get {
                 "valCurrent:noArg ".
                 "weatherApiData:noArg "
                 ;
-                
-  if (!ReadingsVal ($name, '.migrated', 0)) {
-      $getlist .= "x_migrate:noArg ";
-  }
 
   ## KI spezifische Getter
   ##########################
+  my $vdtopt = q{};
+  if (!$aidtabs) {                                                    # AI::DecisionTree ist installiert
+      $vdtopt = 'aiRawData';
+  }
+  
   if (isPrepared4AI ($hash)) {
-       $getlist .= "valDecTree:aiRawData,aiRuleStrings ";
+       $vdtopt .= ',' if($vdtopt);
+       $vdtopt .= 'aiRuleStrings';
+  }
+  
+  if ($vdtopt) {
+      $getlist .= "valDecTree:$vdtopt ";
   }
 
   my (undef, $disabled, $inactive) = controller ($name);
@@ -2569,59 +2652,6 @@ sub Get {
   }
 
 return $getlist;
-}
-
-################################################################
-#                      Getter x_migrate
-################################################################
-sub _getmigrate {                   ## no critic "not used"
-  my $paref = shift;
-  my $name  = $paref->{name};
-  my $hash  = $defs{$name};
-  
-  ### nicht mehr benötigte Daten verarbeiten - Bereich kann später wieder raus !!
-  ##########################################################################################################################    
-  my $n = 0;
-  
-  if (!ReadingsVal ($name, '.migrated', 0)) {
-      for my $hh (1..24) {                                            # 19.01.25 -> Datenmigration pvrlsum, pvfcsum, dnumsum in pvrl_*, pvfc_* 
-          $hh = sprintf "%02d", $hh;
-          
-          for my $cul (sort keys %{$data{$name}{circular}{$hh}}) {
-              next if($cul ne 'dnumsum');
-              
-              for my $dns (sort keys %{$data{$name}{circular}{$hh}{$cul}}) {
-                  next if($dns eq 'simple');
-                  
-                  my ($sabin, $crang) = split /\./, $dns;
-                  my ($pvsum, $fcsum, $dnum) = CircularSumVal ($hash, $hh, $sabin, $crang, undef);
-                  
-                  delete $data{$name}{circular}{$hh}{pvrlsum}{$dns};
-                  delete $data{$name}{circular}{$hh}{pvfcsum}{$dns};
-                  delete $data{$name}{circular}{$hh}{dnumsum}{$dns};
-                  
-                  next if(!defined $pvsum || !defined $fcsum || !$dnum);
-                  
-                  my $pvavg = sprintf "%.0f", ($pvsum / $dnum);
-                  my $fcavg = sprintf "%.0f", ($fcsum / $dnum);
-                  
-                  push @{$data{$name}{circular}{$hh}{'pvrl_'.$sabin}{"$crang"}}, $pvavg;
-                  push @{$data{$name}{circular}{$hh}{'pvfc_'.$sabin}{"$crang"}}, $fcavg;
-                  
-                  $n++;
-              }
-          }
-      }
-      
-      if ($n) {
-          Log3 ($name, 1, "$name - NOTE - the stored PV real and forecast datasets (quantity: $n) were migrated to the new module structure");
-      }
-  
-  }
-  
-  readingsSingleUpdate ($hash, '.migrated', 1, 0);
-  
-return "Circular Store was migrated, $n datasets were migrated";
 }
 
 ################################################################
@@ -2712,7 +2742,7 @@ sub __getSolCastData {
       $maxcnt       = $mx{$apikey} if(!$maxcnt || $mx{$apikey} > $maxcnt);
   }
 
-  my $apimaxreq = AttrVal ($name, 'ctrlSolCastAPImaxReq', $solcmaxreqdef);
+  my $apimaxreq = AttrVal ($name, 'ctrlSolCastAPImaxReq', SOLCMAXREQDEF);
   my $madc      = sprintf "%.0f", ($apimaxreq / $maxcnt);                                          # max. tägliche Anzahl API Calls
   my $mpk       = $maxcnt;                                                                         # Requestmultiplikator
   
@@ -2725,7 +2755,7 @@ sub __getSolCastData {
       my ($rapi, $wapi) = getStatusApiName ($hash); 
       my $trc           = StatusAPIVal ($hash, $rapi, '?All', 'todayRemainingAPIcalls', $madc);
       my $etxt          = $hqtxt{bnsas}{$lang};
-      $etxt            =~ s{<WT>}{($leadtime/60)}eg;
+      $etxt            =~ s{<WT>}{(LEADTIME/60)}eg;
 
       if ($trc <= 0) {
           readingsSingleUpdate ($hash, 'nextRadiationAPICall', $etxt, 1);
@@ -2736,13 +2766,13 @@ sub __getSolCastData {
       my $srtime = timestringToTimestamp ($date.' '.ReadingsVal($name, "Today_SunRise", '23:59').':59');
       my $sstime = timestringToTimestamp ($date.' '.ReadingsVal($name, "Today_SunSet",  '00:00').':00');
 
-      if ($t < $srtime - $leadtime || $t > $sstime + $lagtime) {
+      if ($t < $srtime - LEADTIME || $t > $sstime + LAGTIME) {
           readingsSingleUpdate($hash, 'nextRadiationAPICall', $etxt, 1);
-          return "The current time is not between sunrise minus ".($leadtime/60)." minutes and sunset";
+          return "The current time is not between sunrise minus ".(LEADTIME/60)." minutes and sunset";
       }
 
       my $lrt    = StatusAPIVal ($hash, $rapi, '?All', 'lastretrieval_timestamp',            0);
-      my $apiitv = StatusAPIVal ($hash, $rapi, '?All', 'currentAPIinterval',     $solapirepdef);
+      my $apiitv = StatusAPIVal ($hash, $rapi, '?All', 'currentAPIinterval',     SOLAPIREPDEF);
 
       if ($lrt && $t < $lrt + $apiitv) {
           my $rt = $lrt + $apiitv - $t;
@@ -2920,7 +2950,7 @@ sub __solCast_ApiResponse {
           $data{$name}{current}{runTimeLastAPIAnswer} = sprintf "%.4f", (tv_interval($stc) - tv_interval($sta));       # API Laufzeit ermitteln
 
           if ($debug =~ /apiProcess|apiCall/x) {
-              my $apimaxreq = AttrVal ($name, 'ctrlSolCastAPImaxReq', $solcmaxreqdef);
+              my $apimaxreq = AttrVal ($name, 'ctrlSolCastAPImaxReq', SOLCMAXREQDEF);
 
               Log3 ($name, 1, "$name DEBUG> SolCast API Call - response status: ".$jdata->{'response_status'}{'message'});
               Log3 ($name, 1, "$name DEBUG> SolCast API Call - todayRemainingAPIrequests: ".StatusAPIVal ($hash, 'SolCast', '?All', 'todayRemainingAPIrequests', $apimaxreq));
@@ -3078,7 +3108,7 @@ sub ___setSolCastAPIcallKeyData {
   $data{$name}{statusapi}{SolCast}{'?All'}{lastretrieval_time}      = (timestampToTimestring ($t, $lang))[3];       # letzte Abrufzeit
   $data{$name}{statusapi}{SolCast}{'?All'}{lastretrieval_timestamp} = $t;                                           # letzter Abrufzeitstempel
   
-  my $apimaxreq = AttrVal       ($name, 'ctrlSolCastAPImaxReq',        $solcmaxreqdef);
+  my $apimaxreq = AttrVal       ($name, 'ctrlSolCastAPImaxReq',        SOLCMAXREQDEF);
   my $mpl       = StatusAPIVal ($hash, 'SolCast', '?All', 'solCastAPIcallMultiplier', 1);
   my $ddc       = StatusAPIVal ($hash, 'SolCast', '?All', 'todayDoneAPIcalls',        0);
 
@@ -3107,18 +3137,18 @@ sub ___setSolCastAPIcallKeyData {
       $dart      = 0 if($dart < 0);
       $drc      += 1;
       
-      $data{$name}{statusapi}{SolCast}{'?All'}{currentAPIinterval} = $solapirepdef;
+      $data{$name}{statusapi}{SolCast}{'?All'}{currentAPIinterval} = SOLAPIREPDEF;
       $data{$name}{statusapi}{SolCast}{'?All'}{currentAPIinterval} = int ($dart / $drc) if($dart && $drc);
 
-      debugLog ($paref, "apiProcess|apiCall", "SolCast API Call - Sunset: $sunset, remain Sec to Sunset: $dart, new interval: ".StatusAPIVal ($hash, 'SolCast', '?All', 'currentAPIinterval', $solapirepdef));
+      debugLog ($paref, "apiProcess|apiCall", "SolCast API Call - Sunset: $sunset, remain Sec to Sunset: $dart, new interval: ".StatusAPIVal ($hash, 'SolCast', '?All', 'currentAPIinterval', SOLAPIREPDEF));
   }
   else {
-      $data{$name}{statusapi}{SolCast}{'?All'}{currentAPIinterval} = $solapirepdef;
+      $data{$name}{statusapi}{SolCast}{'?All'}{currentAPIinterval} = SOLAPIREPDEF;
   }
 
   ####
 
-  my $apiitv = StatusAPIVal ($hash, 'SolCast', '?All', 'currentAPIinterval', $solapirepdef);
+  my $apiitv = StatusAPIVal ($hash, 'SolCast', '?All', 'currentAPIinterval', SOLAPIREPDEF);
 
   if ($debug =~ /apiProcess|apiCall/x) {
       Log3 ($name, 1, "$name DEBUG> SolCast API Call - remaining API Calls: ".($drc - 1));
@@ -3144,18 +3174,18 @@ sub __getForecastSolarData {
 
   if (!$force) {                                                                                   # regulärer API Abruf
       my $etxt   = $hqtxt{bnsas}{$lang};
-      $etxt      =~ s{<WT>}{($leadtime/60)}eg;
+      $etxt      =~ s{<WT>}{(LEADTIME/60)}eg;
       my $date   = strftime "%Y-%m-%d", localtime($t);
       my $srtime = timestringToTimestamp ($date.' '.ReadingsVal($name, "Today_SunRise", '23:59').':59');
       my $sstime = timestringToTimestamp ($date.' '.ReadingsVal($name, "Today_SunSet",  '00:00').':00');
 
-      if ($t < $srtime - $leadtime || $t > $sstime + $lagtime) {
+      if ($t < $srtime - LEADTIME || $t > $sstime + LAGTIME) {
           readingsSingleUpdate ($hash, 'nextRadiationAPICall', $etxt, 1);
-          return "The current time is not between sunrise minus ".($leadtime/60)." minutes and sunset";
+          return "The current time is not between sunrise minus ".(LEADTIME/60)." minutes and sunset";
       }
 
       my $lrt    = StatusAPIVal ($hash, 'ForecastSolar', '?All', 'lastretrieval_timestamp',            0);
-      my $apiitv = StatusAPIVal ($hash, 'ForecastSolar', '?All', 'currentAPIinterval',     $forapirepdef);
+      my $apiitv = StatusAPIVal ($hash, 'ForecastSolar', '?All', 'currentAPIinterval',     FORAPIREPDEF);
 
       if ($lrt && $t < $lrt + $apiitv) {
           my $rt = $lrt + $apiitv - $t;
@@ -3436,7 +3466,7 @@ sub ___setForeCastAPIcallKeyData {
   my $period = StatusAPIVal ($hash, 'ForecastSolar', '?All', 'requests_limit_period', 3600);        # Requests Limit Periode
   my $limit  = StatusAPIVal ($hash, 'ForecastSolar', '?All', 'requests_limit',          12);        # Request Limit in Periode
 
-  $data{$name}{statusapi}{ForecastSolar}{'?All'}{currentAPIinterval} = $forapirepdef;
+  $data{$name}{statusapi}{ForecastSolar}{'?All'}{currentAPIinterval} = FORAPIREPDEF;
 
   my $interval = int ($period / ($limit / $snum));
   $interval    = 900 if($interval < 900);
@@ -3445,7 +3475,7 @@ sub ___setForeCastAPIcallKeyData {
 
   ####
 
-  my $apiitv  = StatusAPIVal ($hash, 'ForecastSolar', '?All', 'currentAPIinterval', $forapirepdef);
+  my $apiitv  = StatusAPIVal ($hash, 'ForecastSolar', '?All', 'currentAPIinterval', FORAPIREPDEF);
   my $rtyatts = StatusAPIVal ($hash, 'ForecastSolar', '?All', 'retryat_timestamp',  0);
   my $smt     = q{};
 
@@ -3587,15 +3617,15 @@ sub __getDWDSolarData {
                   my $dirrad = $rad * $sdr;                                                         # Anteil Direktstrahlung an Globalstrahlung
                   my $difrad = $rad - $dirrad;                                                      # Anteil Diffusstrahlung an Globalstrahlung
 
-                  $pv = sprintf "%.1f", ((($dirrad * $af) + $difrad) * $kJtokWh * $peak * $prdef);  # Rad wird in kW/m2 erwartet
+                  $pv = sprintf "%.1f", ((($dirrad * $af) + $difrad) * KJ2KWH * $peak * PRDEF);    # Rad wird in kW/m2 erwartet
               }
               else {                                                                                # Flächenfaktor auf volle Rad1h anwenden
-                  $pv = sprintf "%.1f", ($rad * $af * $kJtokWh * $peak * $prdef);
+                  $pv = sprintf "%.1f", ($rad * $af * KJ2KWH * $peak * PRDEF);
               }
           }
           else {                                                                                    # Flächenfaktor Fix
               $af = ___areaFactorFix ($ti, $az);                                                    # Flächenfaktor: https://wiki.fhem.de/wiki/Ertragsprognose_PV
-              $pv = sprintf "%.1f", ($rad * $af * $kJtokWh * $peak * $prdef);                       # Rad wird in kW/m2 erwartet
+              $pv = sprintf "%.1f", ($rad * $af * KJ2KWH * $peak * PRDEF);                         # Rad wird in kW/m2 erwartet
           }
 
           $data{$name}{solcastapi}{$string}{$dateTime}{pv_estimate50} = $pv;                 # Startzeit wird verwendet, nicht laufende Stunde
@@ -3729,7 +3759,7 @@ sub __getVictronSolarData {
   my $hash  = $defs{$name};
 
   my $lrt    = StatusAPIVal ($hash, 'VictronKi', '?All', 'lastretrieval_timestamp', 0);
-  my $apiitv = $vrmapirepdef;
+  my $apiitv = VRMAPIREPDEF;
 
   if (!$force) {
       if ($lrt && $t < $lrt + $apiitv) {
@@ -4170,8 +4200,8 @@ sub __getopenMeteoData {
   my $hash    = $defs{$name};
   my $donearq = StatusAPIVal ($hash, 'OpenMeteo', '?All', 'todayDoneAPIrequests', 0);
 
-  if ($donearq >= $ometmaxreq) {
-      my $msg = "The limit of maximum $ometmaxreq daily API requests is reached or already exceeded. Process is exited.";
+  if ($donearq >= OMETMAXREQ) {
+      my $msg = "The limit of maximum OMETMAXREQ daily API requests is reached or already exceeded. Process is exited.";
       Log3 ($name, 1, "$name - ERROR - $msg");
       return $msg;
   }
@@ -4179,13 +4209,13 @@ sub __getopenMeteoData {
   if (!$force) {                                                                                      # regulärer API Abruf
       my $lrt = StatusAPIVal ($hash, 'OpenMeteo', '?All', 'lastretrieval_timestamp', 0);
 
-      if ($lrt && $t < $lrt + $ometeorepdef) {
-          my $rt = $lrt + $ometeorepdef - $t;
+      if ($lrt && $t < $lrt + OMETEOREPDEF) {
+          my $rt = $lrt + OMETEOREPDEF - $t;
           return qq{The waiting time to the next Open-Meteo API call has not expired yet. The remaining waiting time is $rt seconds};
       }
   }
 
-  debugLog ($paref, 'apiCall', qq{Open-Meteo API Call - the daily API requests -> limited to: $ometmaxreq, done: $donearq});
+  debugLog ($paref, 'apiCall', qq{Open-Meteo API Call - the daily API requests -> limited to: OMETMAXREQ, done: $donearq});
 
   my $submodel         = InternalVal ($hash->{NAME}, $reqm, '');
   
@@ -4243,7 +4273,7 @@ sub __openMeteoDWD_ApiRequest {
   my $hash       = $defs{$name};
 
   if (!$allstrings) {                                                        # alle Strings wurden abgerufen
-      my $apiitv = StatusAPIVal ($hash, 'OpenMeteo', '?All', 'currentAPIinterval', $ometeorepdef);
+      my $apiitv = StatusAPIVal ($hash, 'OpenMeteo', '?All', 'currentAPIinterval', OMETEOREPDEF);
       readingsSingleUpdate ($hash, 'nextRadiationAPICall', $hqtxt{after}{$lang}.' '.(timestampToTimestring ($t + $apiitv, $lang))[0], 1);
       
       $data{$name}{statusapi}{OpenMeteo}{'?All'}{todayDoneAPIcalls} += 1;
@@ -4338,7 +4368,7 @@ return;
 #    pv (Wh)  = GTI * f / 1000 (kWh/m2) / 1 kW/m2 * Pnenn (kW) * PR * Korr * 1000
 #              (GTI * f) ist bereits in dem API-Ergebnis $rad enthalten in Wh/m2
 #             -> $rad / 1000 (kWh/m2) / 1 kW/m2 * Pnenn (kW) * PR * Korr   (bezogen auf 1 Stunde)
-#             -> my $pv = sprintf "%.0f", ($rad / 1000 * $peak * $prdef);
+#             -> my $pv = sprintf "%.0f", ($rad / 1000 * $peak * PRDEF);
 #
 ################################################################################################
 sub __openMeteoDWD_ApiResponse {
@@ -4472,16 +4502,14 @@ sub __openMeteoDWD_ApiResponse {
           }
 
           my $rad1wh = $jdata->{hourly}{global_tilted_irradiance}[$k];                          # Wh/m2
-          my $rad    = 10 * (sprintf "%.0f", ($rad1wh * $WhtokJ) / 10);                         # Umrechnung Wh/m2 in kJ/m2 ->
-          my $pv     = sprintf "%.2f", int ($rad1wh / 1000 * $peak * $prdef);                   # Rad wird in kWh/m2 erwartet
+          my $rad    = 10 * (sprintf "%.0f", ($rad1wh * WH2KJ) / 10);                           # Umrechnung Wh/m2 in kJ/m2 ->
+          my $pv     = sprintf "%.2f", int ($rad1wh / 1000 * $peak * PRDEF);                    # Rad wird in kWh/m2 erwartet
           
           my $don    = $jdata->{hourly}{is_day}[$k];
           my $temp   = $jdata->{hourly}{temperature_2m}[$k];
           my $rain   = $jdata->{hourly}{rain}[$k];                                              # Regen in Millimeter = kg/m2
-          my $wid    = ($don ? 0 : 100) + $jdata->{hourly}{weather_code}[$k];
+          my $wid    = $jdata->{hourly}{weather_code}[$k];
           my $wcc    = $jdata->{hourly}{cloud_cover}[$k];
-
-          if ($k == 0 && $curwid) { $curwid = ($don ? 0 : 100) +  $curwid }
 
           if ($debug =~ /apiProcess/xs) {
               if ($requestmode eq 'MODEL') {
@@ -4618,11 +4646,11 @@ sub ___setOpenMeteoAPIcallKeyData {
   my $dac = StatusAPIVal ($hash, 'OpenMeteo', '?All', 'todayDoneAPIcalls',    0);
   my $asc = CurrentVal   ($hash, 'allstringscount', 1);
 
-  my $drr = $ometmaxreq - $dar;
+  my $drr = OMETMAXREQ - $dar;
   $drr    = 0 if($drr < 0);
   
   $data{$name}{statusapi}{OpenMeteo}{'?All'}{todayRemainingAPIrequests} = $drr;
-  $data{$name}{statusapi}{OpenMeteo}{'?All'}{currentAPIinterval}        = $ometeorepdef;
+  $data{$name}{statusapi}{OpenMeteo}{'?All'}{currentAPIinterval}        = OMETEOREPDEF;
 
   ## Berechnung des optimalen Request Intervalls
   ################################################
@@ -4632,12 +4660,12 @@ sub ___setOpenMeteoAPIcallKeyData {
 
   if ($drr) {
       my $optrep = $rmdif / ($drr / ($cequ * $asc));
-      $optrep    = $ometeorepdef if($optrep < $ometeorepdef);
+      $optrep    = OMETEOREPDEF if($optrep < OMETEOREPDEF);
       
       $data{$name}{statusapi}{OpenMeteo}{'?All'}{currentAPIinterval} = $optrep;
   }
 
-  debugLog ($paref, "apiProcess|apiCall", "Open-Meteo API Call - remaining API Requests: $drr, Request equivalents p. call: $cequ, new call interval: ".StatusAPIVal ($hash, 'OpenMeteo', '?All', 'currentAPIinterval', $ometeorepdef));
+  debugLog ($paref, "apiProcess|apiCall", "Open-Meteo API Call - remaining API Requests: $drr, Request equivalents p. call: $cequ, new call interval: ".StatusAPIVal ($hash, 'OpenMeteo', '?All', 'currentAPIinterval', OMETEOREPDEF));
 
 return;
 }
@@ -4744,7 +4772,7 @@ sub _getlistPVCircular {
   my $hash  = $defs{$name};
 
   my $ret = listDataPool   ($hash, 'circular', $arg);
-  $ret   .= lineFromSpaces ($ret, 5);
+  $ret   .= lineFromSpaces ($ret, 10);
 
 return $ret;
 }
@@ -5331,7 +5359,7 @@ sub _ftuiFramefiles {
 
   my $ret;
   my $upddo = 0;
-  my $cfurl = $bPath.$cfile.$pPath;
+  my $cfurl = BPATH.CFILE.PPATH;
 
   for my $file (@fs) {
       my $lencheck = 1;
@@ -5339,8 +5367,8 @@ sub _ftuiFramefiles {
       my ($cmerr, $cmupd, $cmmsg, $cmrec, $cmfile, $cmlen) = checkModVer ($name, $file, $cfurl);
 
       if ($cmerr && $cmmsg =~ /Automatic\scheck/xs && $cmrec =~ /Compare\syour\slocal/xs) {        # lokales control file ist noch nicht vorhanden -> update ohne Längencheck
-          $cmfile   = 'FHEM/'.$cfile;
-          $file     = $cfile;
+          $cmfile   = 'FHEM/'.CFILE;
+          $file     = CFILE;
           $lencheck = 0;
           $cmerr    = 0;
           $cmupd    = 1;
@@ -5359,9 +5387,7 @@ sub _ftuiFramefiles {
                                   root     => $root,
                                   cmfile   => $cmfile,
                                   cmlen    => $cmlen,
-                                  bPath    => $bPath,
                                   file     => $file,
-                                  pPath    => $pPath,
                                   lencheck => $lencheck
                                 }
                               );
@@ -5374,11 +5400,9 @@ sub _ftuiFramefiles {
   ################################
   $ret = __updPreFile ( { name     => $name,
                           root     => $root,
-                          cmfile   => 'FHEM/'.$cfile,
+                          cmfile   => 'FHEM/'.CFILE,
                           cmlen    => 0,
-                          bPath    => $bPath,
-                          file     => $cfile,
-                          pPath    => $pPath,
+                          file     => CFILE,
                           lencheck => 0,
                           finalupd => 1
                         }
@@ -5403,9 +5427,7 @@ sub __updPreFile {
   my $root     = $pars->{root};
   my $cmfile   = $pars->{cmfile};
   my $cmlen    = $pars->{cmlen};
-  my $bPath    = $pars->{bPath};
   my $file     = $pars->{file};
-  my $pPath    = $pars->{pPath};
   my $lencheck = $pars->{lencheck};
   my $finalupd = $pars->{finalupd} // 0;
 
@@ -5429,7 +5451,7 @@ sub __updPreFile {
       }
   }
 
-  ($err, my $remFile) = __httpBlockingGet ($name, $bPath.$file.$pPath);
+  ($err, my $remFile) = __httpBlockingGet ($name, BPATH.$file.PPATH);
 
   if ($err) {
       Log3 ($name, 1, "$name - $err");
@@ -6520,7 +6542,7 @@ sub Notify {
   
   ## Battery Event?
   ###################
-  for my $bn (1..$maxbatteries) {
+  for my $bn (1..MAXBATTERIES) {
       $bn    = sprintf "%02d", $bn;
       $bname = BatteryVal ($myHash, $bn, 'bname', '');
   
@@ -6549,7 +6571,7 @@ sub Notify {
   
   ## Inverter Event?
   ####################  
-  for my $in (1..$maxinverter) {
+  for my $in (1..MAXINVERTER) {
       $in    = sprintf "%02d", $in;
       $iname = InverterVal ($myHash, $in, 'iname', '');
       
@@ -6793,7 +6815,7 @@ sub periodicWriteMemcache {
   my $name = $hash->{NAME};
 
   RemoveInternalTimer ($hash, "FHEM::SolarForecast::periodicWriteMemcache");
-  InternalTimer       (gettimeofday() + $whistrepeat, "FHEM::SolarForecast::periodicWriteMemcache", $hash, 0);
+  InternalTimer       (gettimeofday() + WHISTREPEAT, "FHEM::SolarForecast::periodicWriteMemcache", $hash, 0);
 
   my (undef, $disabled, $inactive) = controller ($name);
   return if($disabled || $inactive);
@@ -7447,7 +7469,7 @@ sub _addDynAttr {
   
   ## Attr setupWeatherDevX / setupRadiationAPI zur Laufzeit hinzufügen
   ######################################################################
-  for my $step (1..$weatherDevMax) {
+  for my $step (1..MAXWEATHERDEV) {
       if ($step == 1) {
           push @deva, ($adwds ? "setupWeatherDev1:OpenMeteoDWD-API,OpenMeteoDWDEnsemble-API,OpenMeteoWorld-API,$adwds" :
                        "setupWeatherDev1:OpenMeteoDWD-API,OpenMeteoDWDEnsemble-API,OpenMeteoWorld-API");
@@ -7464,7 +7486,7 @@ sub _addDynAttr {
   my $gbc;
   
   if (isBatteryUsed ($name)) {
-      for my $bn (1..$maxbatteries) {                                          
+      for my $bn (1..MAXBATTERIES) {                                          
           $bn   = sprintf "%02d", $bn;
           $gbc .= 'batsocforecast_'.$bn.',';
       }
@@ -7526,6 +7548,7 @@ sub centralTask {
   ##########################################################################################################################    
 
   delete $data{$name}{circular}{99}{days2care};                                 # 29.12.2024
+  delete $data{$name}{circular}{'00'};                                            # 04.02.2025
   
   $data{$name}{circular}{99}{initdaybatintot01}  = delete $data{$name}{circular}{99}{initdaybatintot}  if(defined $data{$name}{circular}{99}{initdaybatintot});     # 29.12.2024
   $data{$name}{circular}{99}{initdaybatouttot01} = delete $data{$name}{circular}{99}{initdaybatouttot} if(defined $data{$name}{circular}{99}{initdaybatouttot});    # 29.12.2024
@@ -7543,13 +7566,14 @@ sub centralTask {
   deleteReadingspec ($hash, 'Today_.*_BatIn');                                  # 30.12.2024 
   deleteReadingspec ($hash, 'Today_.*_BatOut');                                 # 30.12.2024  
   deleteReadingspec ($hash, 'statistic_.*');                                    # 02.01.2025
+  readingsDelete    ($hash, '.migrated');                                       # 01.02.25
   
   for my $ck (keys %{$data{$name}{circular}}) {                                 # 30.12.2024
       $data{$name}{circular}{$ck}{batin01}  = delete $data{$name}{circular}{$ck}{batin}  if(defined $data{$name}{circular}{$ck}{batin});
       $data{$name}{circular}{$ck}{batout01} = delete $data{$name}{circular}{$ck}{batout} if(defined $data{$name}{circular}{$ck}{batout});
   }
   
-  for my $pn (1..$maxproducer) {                                                # 30.12.2024                                                                                                      
+  for my $pn (1..MAXPRODUCER) {                                                # 30.12.2024                                                                                                      
       $pn       = sprintf "%02d", $pn;
       readingsDelete ($hash, 'Current_PP'.$pn);      
       deleteReadingspec    ($hash, '.*PPreal'.$pn);
@@ -7564,6 +7588,40 @@ sub centralTask {
           $data{$name}{pvhist}{$dy}{$hr}{batmaxsoc01}   = delete $data{$name}{pvhist}{$dy}{$hr}{batmaxsoc}   if(defined $data{$name}{pvhist}{$dy}{$hr}{batmaxsoc});
           $data{$name}{pvhist}{$dy}{$hr}{batsetsoc01}   = delete $data{$name}{pvhist}{$dy}{$hr}{batsetsoc}   if(defined $data{$name}{pvhist}{$dy}{$hr}{batsetsoc});
       }
+  }
+  
+  my $n = 0;                                                       # 01.02.25 -> Datenmigration pvrlsum, pvfcsum, dnumsum in pvrl_*, pvfc_* 
+  for my $hh (1..24) {                                            
+      $hh = sprintf "%02d", $hh;
+      
+      for my $cul (sort keys %{$data{$name}{circular}{$hh}}) {
+          next if($cul ne 'dnumsum');
+          
+          for my $dns (sort keys %{$data{$name}{circular}{$hh}{$cul}}) {
+              next if($dns eq 'simple');
+              
+              my ($sabin, $crang) = split /\./, $dns;
+              my ($pvsum, $fcsum, $dnum) = CircularSumVal ($hash, $hh, $sabin, $crang, undef);
+              
+              delete $data{$name}{circular}{$hh}{pvrlsum}{$dns};
+              delete $data{$name}{circular}{$hh}{pvfcsum}{$dns};
+              delete $data{$name}{circular}{$hh}{dnumsum}{$dns};
+              
+              next if(!defined $pvsum || !defined $fcsum || !$dnum);
+              
+              my $pvavg = sprintf "%.0f", ($pvsum / $dnum);
+              my $fcavg = sprintf "%.0f", ($fcsum / $dnum);
+              
+              push @{$data{$name}{circular}{$hh}{'pvrl_'.$sabin}{"$crang"}}, $pvavg;
+              push @{$data{$name}{circular}{$hh}{'pvfc_'.$sabin}{"$crang"}}, $fcavg;
+              
+              $n++;
+          }
+      }
+  }
+  
+  if ($n) {
+      Log3 ($name, 1, "$name - NOTE - the stored PV real and forecast datasets (quantity: $n) were migrated to the new module structure");
   }
   
   ##########################################################################################################################
@@ -7589,23 +7647,21 @@ sub centralTask {
   $data{$name}{current}{ctrunning} = 1;                                                        # Central Task running Statusbit
   InternalTimer (gettimeofday() + 2.0, "FHEM::SolarForecast::releaseCentralTask", $hash, 0);   # Freigabe centralTask
 
-  my $t       = time;                                                                          # aktuelle Unix-Zeit
-  my $date    = strftime "%Y-%m-%d", localtime($t);                                            # aktuelles Datum
-  my $chour   = strftime "%H",       localtime($t);                                            # aktuelle Stunde in 24h format (00-23)
-  my $minute  = strftime "%M",       localtime($t);                                            # aktuelle Minute (00-59)
-  my $day     = strftime "%d",       localtime($t);                                            # aktueller Tag (range 01 .. 31)
-  my $dayname = strftime "%a",       localtime($t);                                            # aktueller Wochentagsname
-  my $debug   = getDebug ($hash);                                                              # Debug Module 
+  my $t     = time;                                                                            # aktuelle Unix-Zeit
+  my $debug = getDebug ($hash);                                                                # Debug Module 
+  
+  my $dt    = timestringsFromOffset ($t, 0);
+  my $chour = $dt->{hour};  
 
   my $centpars = {
       name    => $name,
       type    => $type,
       t       => $t,
-      date    => $date,
-      minute  => $minute,
-      chour   => $chour,
-      day     => $day,
-      dayname => $dayname,
+      date    => $dt->{date},                                                                  # aktuelles Datum
+      minute  => $dt->{minute},                                                                # aktuelle Minute (00-59)
+      chour   => $dt->{hour},                                                                  # aktuelle Stunde in 24h format (00-23)
+      day     => $dt->{day},                                                                   # aktueller Tag (range 01 .. 31)
+      dayname => $dt->{dayname},                                                               # aktueller Wochentagsname (locale-dependent!!)
       debug   => $debug,
       lang    => getLang ($hash),
       state   => 'running',
@@ -7641,10 +7697,13 @@ sub centralTask {
   _batChargeRecmd             ($centpars);                                            # Batterie Ladefreigabe berechnen und erstellen
   _manageConsumerData         ($centpars);                                            # Consumer Daten sammeln und Zeiten planen
   _calcConsumptionForecast    ($centpars);                                            # Verbrauchsprognose erstellen
+  
+  _calcConsumptionForecast_circular ($centpars);                                      # Test neue Verbrauchsprognose 
+  
   _evaluateThresholds         ($centpars);                                            # Schwellenwerte bewerten und signalisieren
   _calcReadingsTomorrowPVFc   ($centpars);                                            # zusätzliche Readings Tomorrow_HourXX_PVforecast berechnen
   _calcTodayPVdeviation       ($centpars);                                            # Vorhersageabweichung erstellen (nach Sonnenuntergang)
-  _calcValueImproves          ($centpars);                                            # neue Korrekturfaktor/Qualität und berechnen und speichern, AI anreichern
+  _calcDataEveryFullHour      ($centpars);                                            # Daten berechnen/speichern die nur einmal nach jeder vollen Stunde ermittelt werden
   _saveEnergyConsumption      ($centpars);                                            # Energie Hausverbrauch speichern
   _createSummaries            ($centpars);                                            # Zusammenfassungen erstellen
   _genSpecialReadings         ($centpars);                                            # optionale Statistikreadings erstellen
@@ -7836,7 +7895,7 @@ sub _collectAllRegConsumers {
 
   delete $data{$name}{current}{consumerdevs};
 
-  for my $c (1..$maxconsumer) {
+  for my $c (1..MAXCONSUMER) {
       $c = sprintf "%02d", $c;
       my ($err, $consumer, $hc, $alias) = isDeviceValid ( { name => $name, obj => "consumer${c}", method => 'attr' } );
       next if($err);
@@ -7915,7 +7974,7 @@ sub _collectAllRegConsumers {
           }
       }
       
-      $hyst = $defhyst if(!$hyst);
+      $hyst = DEFHYST if(!$hyst);
 
       my ($riseshift, $setshift);
 
@@ -7939,15 +7998,15 @@ sub _collectAllRegConsumers {
       delete $data{$name}{consumers}{$c}{icon};
 
       my $rauto = $hc->{auto} // q{};
-      my $ctype = $hc->{type} // $defctype;
+      my $ctype = $hc->{type} // DEFCTYPE;
 
       $data{$name}{consumers}{$c}{name}              = $consumer;                                # Name des Verbrauchers (Device)
       $data{$name}{consumers}{$c}{alias}             = $alias;                                   # Alias des Verbrauchers (Device)
-      $data{$name}{consumers}{$c}{type}              = $hc->{type}         // $defctype;         # Typ des Verbrauchers
+      $data{$name}{consumers}{$c}{type}              = $hc->{type}         // DEFCTYPE;          # Typ des Verbrauchers
       $data{$name}{consumers}{$c}{power}             = $hc->{power};                             # Leistungsaufnahme des Verbrauchers in W
       $data{$name}{consumers}{$c}{avgenergy}         = q{};                                      # Initialwert Energieverbrauch (evtl. Überschreiben in manageConsumerData)
       $data{$name}{consumers}{$c}{mintime}           = $hc->{mintime}      // $hef{$ctype}{mt};  # Initialwert min. Einplanungsdauer (evtl. Überschreiben in manageConsumerData)
-      $data{$name}{consumers}{$c}{mode}              = $hc->{mode}         // $defcmode;         # Planungsmode des Verbrauchers
+      $data{$name}{consumers}{$c}{mode}              = $hc->{mode}         // DEFCMODE;         # Planungsmode des Verbrauchers
       $data{$name}{consumers}{$c}{oncom}             = $hc->{on}           // q{};               # Setter Einschaltkommando
       $data{$name}{consumers}{$c}{offcom}            = $hc->{off}          // q{};               # Setter Ausschaltkommando
       $data{$name}{consumers}{$c}{dswitch}           = $dswitch;                                 # Switchdevice zur Kommandoausführung
@@ -8036,15 +8095,32 @@ sub _specialActivities {
   ##################################
   $chour    = int $chour;
   $minute   = int $minute;
-  my $aitrh = AttrVal ($name, 'ctrlAIshiftTrainStart', $aitrstartdef);                        # Stunde f. Start AI-Training
+  my $aitrh = AttrVal ($name, 'ctrlAIshiftTrainStart', AITRSTARTDEF);                             # Stunde f. Start AI-Training
 
   ## Task 1
   ###########
-  if ($chour == 0 && $minute >= 0) {
+  if ($chour == 0) {
       if (!defined $hash->{HELPER}{T1RUN}) {
           $hash->{HELPER}{T1RUN} = 1;
 
           Log3 ($name, 4, "$name - Daily special tasks - Task 1 started");
+
+          __deleteEveryHourControls ($paref);                                                     # Sperrsignale der Stundenwerte-Steuerung löschen
+
+          Log3 ($name, 4, "$name - Daily special tasks - Task 1 finished");
+      }
+  }
+  else {
+      delete $hash->{HELPER}{T1RUN};
+  }
+  
+  ## Task 2
+  ###########
+  if ($chour == 0 && $minute >= 0) {
+      if (!defined $hash->{HELPER}{T2RUN}) {
+          $hash->{HELPER}{T2RUN} = 1;
+
+          Log3 ($name, 4, "$name - Daily special tasks - Task 2 started");
 
           $date = strftime "%Y-%m-%d", localtime($t-7200);                                         # Vortag (2 h Differenz reichen aus)
           $ts   = $date." 23:59:59";
@@ -8061,6 +8137,9 @@ sub _specialActivities {
           deleteReadingspec ($hash, '(Today_Hour(.*_Grid.*|.*_PV.*|.*_PPreal.*|.*_Bat.*)|powerTrigger_.*|Today_MaxPVforecast.*)');
           readingsDelete    ($hash, 'Today_PVdeviation');
           readingsDelete    ($hash, 'Today_PVreal');
+          
+          readingsDelete    ($hash, 'Error');
+          readingsDelete    ($hash, 'Errorcode');
 
           if (scalar(@widgetreadings)) {                                                          # vermeide Schleife falls FHEMWEB geöfffnet
               my @acopy       = @widgetreadings;
@@ -8082,7 +8161,7 @@ sub _specialActivities {
           delete $data{$name}{current}{sunsetToday};
           delete $data{$name}{current}{sunsetTodayTs};
           
-          for my $bn (1..$maxbatteries) {
+          for my $bn (1..MAXBATTERIES) {
               $bn = sprintf "%02d", $bn;
               delete $data{$name}{circular}{99}{'initdaybatintot'.$bn};
               delete $data{$name}{circular}{99}{'initdaybatouttot'.$bn};
@@ -8096,28 +8175,6 @@ sub _specialActivities {
           writeCacheToFile ($hash, 'plantconfig', $plantcfg.$name);                              # Anlagenkonfiguration sichern
 
           Log3 ($name, 3, "$name - history day >$day< deleted");
-          Log3 ($name, 4, "$name - Daily special tasks - Task 1 finished");
-      }
-  }
-  else {
-      delete $hash->{HELPER}{T1RUN};
-  }
-
-  ## Task 2
-  ###########
-  if ($chour == 0 && $minute >= 2) {
-      if (!defined $hash->{HELPER}{T2RUN}) {
-          $hash->{HELPER}{T2RUN} = 1;
-
-          Log3 ($name, 4, "$name - Daily special tasks - Task 2 started");
-
-          for my $c (keys %{$data{$name}{consumers}}) {                                  # Planungsdaten regulär löschen
-              next if(ConsumerVal ($hash, $c, "plandelete", "regular") ne "regular");
-              deleteConsumerPlanning ($hash, $c);
-          }
-
-          writeCacheToFile ($hash, "consumers", $csmcache.$name);                           # Cache File Consumer schreiben
-
           Log3 ($name, 4, "$name - Daily special tasks - Task 2 finished");
       }
   }
@@ -8127,14 +8184,18 @@ sub _specialActivities {
 
   ## Task 3
   ###########
-  if ($chour == 0 && $minute >= 5) {
+  if ($chour == 0 && $minute >= 2) {
       if (!defined $hash->{HELPER}{T3RUN}) {
           $hash->{HELPER}{T3RUN} = 1;
 
           Log3 ($name, 4, "$name - Daily special tasks - Task 3 started");
 
-          __createAdditionalEvents ($paref);                                                # zusätzliche Events erzeugen - PV Vorhersage bis Ende des kommenden Tages
-          __delObsoleteAPIData     ($paref);                                                # Bereinigung obsoleter Daten im solcastapi Hash
+          for my $c (keys %{$data{$name}{consumers}}) {                                         # Planungsdaten regulär löschen
+              next if(ConsumerVal ($hash, $c, "plandelete", "regular") ne "regular");
+              deleteConsumerPlanning ($hash, $c);
+          }
+
+          writeCacheToFile ($hash, "consumers", $csmcache.$name);                               # Cache File Consumer schreiben
 
           Log3 ($name, 4, "$name - Daily special tasks - Task 3 finished");
       }
@@ -8145,17 +8206,14 @@ sub _specialActivities {
 
   ## Task 4
   ###########
-  if ($chour == 0 && $minute >= 9) {
+  if ($chour == 0 && $minute >= 5) {
       if (!defined $hash->{HELPER}{T4RUN}) {
           $hash->{HELPER}{T4RUN} = 1;
 
           Log3 ($name, 4, "$name - Daily special tasks - Task 4 started");
 
-          __deletePvCorffReadings ($paref);                                                 # Readings der pvCorrectionFactor-Steuerung löschen
-          
-          if (AttrVal ($name, 'ctrlBackupFilesKeep', 3)) {
-              periodicWriteMemcache ($hash, 'bckp');                                        # Backup Files erstellen und alte Versionen löschen (unterbleibt bei ctrlBackupFilesKeep == 0)
-          }
+          __createAdditionalEvents ($paref);                                                   # zusätzliche Events erzeugen - PV Vorhersage bis Ende des kommenden Tages
+          __delObsoleteAPIData     ($paref);                                                   # Bereinigung obsoleter Daten im solcastapi Hash
 
           Log3 ($name, 4, "$name - Daily special tasks - Task 4 finished");
       }
@@ -8166,17 +8224,15 @@ sub _specialActivities {
 
   ## Task 5
   ###########
-  if ($chour == $aitrh && $minute >= 15) {
+  if ($chour == 0 && $minute >= 9) {
       if (!defined $hash->{HELPER}{T5RUN}) {
           $hash->{HELPER}{T5RUN} = 1;
 
           Log3 ($name, 4, "$name - Daily special tasks - Task 5 started");
-
-          aiDelRawData ($paref);                                                            # KI Raw Daten löschen welche die maximale Haltezeit überschritten haben
-
-          $paref->{taa} = 1;
-          aiAddInstance ($paref);                                                           # AI füllen, trainieren und sichern
-          delete $paref->{taa};
+          
+          if (AttrVal ($name, 'ctrlBackupFilesKeep', 3)) {
+              periodicWriteMemcache ($hash, 'bckp');                                          # Backup Files erstellen und alte Versionen löschen (unterbleibt bei ctrlBackupFilesKeep == 0)
+          }
 
           Log3 ($name, 4, "$name - Daily special tasks - Task 5 finished");
       }
@@ -8185,22 +8241,47 @@ sub _specialActivities {
       delete $hash->{HELPER}{T5RUN};
   }
 
+  ## Task 6
+  ###########
+  if ($chour == $aitrh && $minute >= 15) {
+      if (!defined $hash->{HELPER}{T6RUN}) {
+          $hash->{HELPER}{T6RUN} = 1;
+
+          Log3 ($name, 4, "$name - Daily special tasks - Task 6 started");
+
+          aiDelRawData ($paref);                                                            # KI Raw Daten löschen welche die maximale Haltezeit überschritten haben
+
+          $paref->{taa} = 1;
+          aiAddInstancePV ($paref);                                                         # AI PV-Forecast füllen, trainieren und sichern
+          delete $paref->{taa};
+
+          Log3 ($name, 4, "$name - Daily special tasks - Task 6 finished");
+      }
+  }
+  else {
+      delete $hash->{HELPER}{T6RUN};
+  }
+
 return;
 }
 
 #############################################################################
 #         Readings der pvCorrectionFactor-Steuerung löschen
 #############################################################################
-sub __deletePvCorffReadings  {
+sub __deleteEveryHourControls  {
   my $paref = shift;
   my $name  = $paref->{name};
   my $hash  = $defs{$name};
 
-  for my $n (1..24) {
+  for my $n (0..24) {
       $n = sprintf "%02d", $n;
 
-      readingsDelete ($hash, ".pvCorrectionFactor_${n}_cloudcover");
+  ### nicht mehr benötigte Daten verarbeiten - Bereich kann später wieder raus !!
+  ##########################################################################################################################
+      readingsDelete ($hash, ".pvCorrectionFactor_${n}_cloudcover");                 # 01.02.2025
       readingsDelete ($hash, ".pvCorrectionFactor_${n}_apipercentil");
+  ##########################################################################################################################
+      
       readingsDelete ($hash, ".signaldone_${n}");
 
       if (ReadingsVal ($name, 'pvCorrectionFactor_Auto', 'off') =~ /on/xs) {
@@ -8315,16 +8396,13 @@ return;
 sub _transferWeatherValues {
   my $paref = shift;
   my $name  = $paref->{name};
-  my $t     = $paref->{t};                                                                     # Epoche Zeit
   my $chour = $paref->{chour};
   my $hash  = $defs{$name};
 
   my ($valid, $fcname, $apiu) = isWeatherDevValid ($hash, 'setupWeatherDev1');                 # Standard Weather Forecast Device
   return if(!$valid);
 
-  my $type = $paref->{type};
-
-  delete $data{$name}{weatherdata};                                                         # Wetterdaten Hash löschen
+  delete $data{$name}{weatherdata};                                                            # Wetterdaten Hash löschen
 
   $paref->{apiu}   = $apiu;                                                                    # API wird verwendet
   $paref->{fcname} = $fcname;
@@ -8347,13 +8425,13 @@ sub _transferWeatherValues {
   $data{$name}{current}{dwdWfchAge}   = $fctime;
   $data{$name}{current}{dwdWfchAgeTS} = $fctimets;
 
-  for my $step (1..$weatherDevMax) {
+  for my $step (1..MAXWEATHERDEV) {
       $paref->{step} = $step;
-      __readDataWeather ($paref);                                                              # Wetterdaten in einen Hash einlesen
+      __readDataWeather ($paref);                                                           # Wetterdaten aus Device in Wetter-Hash einlesen
        delete $paref->{step};
   }
 
-  __mergeDataWeather ($paref);                                                                 # Wetterdaten zusammenfügen
+  __mergeDataWeather ($paref);                                                              # Wetterdaten zusammenfügen
 
   for my $num (0..46) {
       my ($fd, $fh) = calcDayHourMove ($chour, $num);
@@ -8366,7 +8444,7 @@ sub _transferWeatherValues {
       my $temp  = $data{$name}{weatherdata}{"fc${fd}_${fh}"}{merge}{ttt};                   # Außentemperatur
       my $don   = $data{$name}{weatherdata}{"fc${fd}_${fh}"}{merge}{don};                   # Tag/Nacht-Grenze
 
-      my $nhtstr                                     = "NextHour".sprintf "%02d", $num;
+      my $nhtstr                                  = "NextHour".sprintf "%02d", $num;
       $data{$name}{nexthours}{$nhtstr}{weatherid} = $wid;
       $data{$name}{nexthours}{$nhtstr}{wcc}       = $wcc;
       $data{$name}{nexthours}{$nhtstr}{rr1c}      = $rr1c;
@@ -8410,6 +8488,7 @@ sub __readDataWeather {
   my $chour = $paref->{chour};                                                                  # aktuelles Datum
   my $type  = $paref->{type};
   my $step  = $paref->{step};
+  my $t     = $paref->{t};
   my $hash  = $defs{$name};
 
   my ($valid, $fcname, $apiu) = isWeatherDevValid ($hash, 'setupWeatherDev'.$step);             # Weather Forecast Device
@@ -8431,12 +8510,23 @@ sub __readDataWeather {
       my ($fd, $fh) = calcDayHourMove ($chour, $n);
       last if($fd > 1);
 
-      my $wid   = ReadingsNum ($fcname, "fc${fd}_${fh}_ww", undef);                            # Signifikantes Wetter zum Vorhersagezeitpunkt
-      my $wwd   = ReadingsVal ($fcname, "fc${fd}_${fh}_wwd",   '');                            # Wetter Beschreibung
-      my $neff  = ReadingsNum ($fcname, "fc${fd}_${fh}_Neff",   0);                            # Effektiver Bedeckungsgrad zum Vorhersagezeitpunkt
-      my $temp  = ReadingsNum ($fcname, "fc${fd}_${fh}_TTT",    0);                            # 2m-Temperatur zum Vorhersagezeitpunkt
-      my $sunup = ReadingsNum ($fcname, "fc${fd}_${fh}_SunUp",  0);                            # 1 - Tag
+      my $wid   = ReadingsNum ($fcname, "fc${fd}_${fh}_ww",   undef);                          # Signifikantes Wetter zum Vorhersagezeitpunkt
+      my $wwd   = ReadingsVal ($fcname, "fc${fd}_${fh}_wwd",     '');                          # Wetter Beschreibung
+      my $neff  = ReadingsNum ($fcname, "fc${fd}_${fh}_Neff", undef);                          # Effektiver Bedeckungsgrad zum Vorhersagezeitpunkt
+      my $temp  = ReadingsNum ($fcname, "fc${fd}_${fh}_TTT",  undef);                          # 2m-Temperatur zum Vorhersagezeitpunkt
+      my $sunup = ReadingsNum ($fcname, "fc${fd}_${fh}_SunUp",    0);                          # 1 - Tag
 
+      if (!$n) {                                                                               # Hour 00 -> Werte des vorigen Tag / hour 24 verwenden
+          my $dt  = timestringsFromOffset ($t, -86400);                                          
+          $wid  //= HistoryVal ($name, $dt->{day}, '24', 'weatherid', undef);
+          $neff //= HistoryVal ($name, $dt->{day}, '24', 'wcc',       undef);
+          $temp //= HistoryVal ($name, $dt->{day}, '24', 'temp',      undef);
+      }
+      
+      if (!$sunup && defined $wid && defined $weather_ids{$wid}{icon} && $weather_ids{$wid}{icon} ne 'unknown') {        # Nacht-Icons
+          $wid += 100;
+      }
+          
       my $fh1 = $fh + 1;
       my $fd1 = $fd;
 
@@ -8447,13 +8537,9 @@ sub __readDataWeather {
 
       last if($fd1 > 1);
 
-      my $rr1c = ReadingsNum ($fcname, "fc${fd1}_${fh1}_RR1c", 0);                             # Gesamtniederschlag (1-stündig) letzte 1 Stunde
+      my $rr1c = ReadingsNum ($fcname, "fc${fd1}_${fh1}_RR1c", 0);                             # Gesamtniederschlag (1-stündig) letzte 1 Stunde -> wir schuen in die Zukunft
 
-      if (defined $wid && !$sunup) {
-          $wid += 100;
-      }
-
-      debugLog ($paref, 'collectData', "Weather $step: fc${fd}_${fh}, don: $sunup, ww: ".(defined $wid ? $wid : '<undef>').", RR1c: $rr1c, TTT: $temp, Neff: $neff");
+      debugLog ($paref, 'collectData', "Weather $step: fc${fd}_${fh}, don: $sunup, wid: ".(defined $wid ? $wid : '<undef>').", RR1c: $rr1c, TTT: ".(defined $temp ? $temp : '<undef>').", Neff: ".(defined $neff ? $neff : '<undef>'));
 
       $data{$name}{weatherdata}{"fc${fd}_${fh}"}{$step}{ww}   = $wid;
       $data{$name}{weatherdata}{"fc${fd}_${fh}"}{$step}{wwd}  = $wwd;
@@ -8482,12 +8568,22 @@ sub ___readDataWeatherAPI {
   my ($rapi, $wapi) = getStatusApiName ($hash); 
   
   for my $idx (sort keys %{$data{$name}{weatherapi}{$wapi}}) {
-      if ($idx =~ /^fc?([0-9]{1,2})_?([0-9]{1,2})$/xs) {                                        # valider Weather API Index          
+      if ($idx =~ /^fc?([0-9]{1,2})_?([0-9]{1,2})$/xs) {                                                                    # valider Weather API Index          
           my $rr1c = WeatherAPIVal ($hash, $wapi, $idx, 'rr1c', undef);
           my $wid  = WeatherAPIVal ($hash, $wapi, $idx, 'ww',   undef);
           my $neff = WeatherAPIVal ($hash, $wapi, $idx, 'neff', undef);
-          my $don  = WeatherAPIVal ($hash, $wapi, $idx, 'don',  undef);
+          my $don  = WeatherAPIVal ($hash, $wapi, $idx, 'don',      0);
           my $ttt  = WeatherAPIVal ($hash, $wapi, $idx, 'ttt',  undef);
+          
+          if ($idx eq 'fc0_0') {
+              $wid  //= WeatherAPIVal ($hash, $wapi, 'fc0_1', 'ww',   undef);
+              $neff //= WeatherAPIVal ($hash, $wapi, 'fc0_1', 'neff', undef);
+              $ttt  //= WeatherAPIVal ($hash, $wapi, 'fc0_1', 'ttt',  undef);
+          }
+          
+          if (!$don && defined $wid && defined $weather_ids{$wid}{icon} && $weather_ids{$wid}{icon} ne 'unknown') {        # Nacht-Icons
+              $wid += 100;
+          }
 
           $data{$name}{weatherdata}{$idx}{$step}{ww}   = $wid  if(defined $wid);
           $data{$name}{weatherdata}{$idx}{$step}{neff} = $neff if(defined $neff);
@@ -8497,7 +8593,7 @@ sub ___readDataWeatherAPI {
 
           debugLog ($paref, 'collectData', "Weather $step: $idx".
                                            ", don: ". (defined $don  ? $don  : '<undef>').
-                                           ", ww: ".  (defined $wid  ? $wid  : '<undef>').
+                                           ", wid: ". (defined $wid  ? $wid  : '<undef>').
                                            ", RR1c: ".(defined $rr1c ? $rr1c : '<undef>').
                                            ", TTT: ". (defined $ttt  ? $ttt  : '<undef>').
                                            ", Neff: ".(defined $neff ? $neff : '<undef>')
@@ -8521,7 +8617,7 @@ sub __mergeDataWeather {
 
   my $ds = 0;
 
-  for my $wd (1..$weatherDevMax) {
+  for my $wd (1..MAXWEATHERDEV) {
       my ($valid, $fcname, $apiu) = isWeatherDevValid ($hash, 'setupWeatherDev'.$wd);              # Weather Forecast Device
       $ds++ if($valid);
   }
@@ -8562,7 +8658,7 @@ sub __mergeDataWeather {
 
       debugLog ($paref, 'collectData', "Weather merged: $key, ".
                                        "don: $data{$name}{weatherdata}{$key}{merge}{don}, ".
-                                       "ww: ".(defined $data{$name}{weatherdata}{$key}{1}{ww} ? $data{$name}{weatherdata}{$key}{1}{ww} : '<undef>').", ".
+                                       "wid: ".(defined $data{$name}{weatherdata}{$key}{1}{ww} ? $data{$name}{weatherdata}{$key}{1}{ww} : '<undef>').", ".
                                        "RR1c: $data{$name}{weatherdata}{$key}{merge}{rr1c}, ".
                                        "TTT: $data{$name}{weatherdata}{$key}{merge}{ttt}, ".
                                        "Neff: $data{$name}{weatherdata}{$key}{merge}{neff}");
@@ -8657,7 +8753,7 @@ sub _transferInverterValues {
   my $pvsum        = 0;                                                 # Summe aktuelle PV aller Inverter
   my $ethishoursum = 0;                                                 # Summe Erzeugung akt. Stunde aller Inverter
   
-  for my $in (1..$maxinverter) {
+  for my $in (1..MAXINVERTER) {
       $in = sprintf "%02d", $in;
       
       my ($err, $indev, $h) = isDeviceValid ( { name => $name, obj => 'setupInverterDev'.$in, method => 'attr' } );
@@ -8740,7 +8836,7 @@ sub _transferInverterValues {
   $data{$name}{circular}{sprintf("%02d",$nhour)}{pvrl} = $ethishoursum;                                          # Ringspeicher PV real Forum: https://forum.fhem.de/index.php/topic,117864.msg1133350.html#msg1133350
   
   push @{$data{$name}{current}{genslidereg}}, $pvsum;                                                            # Schieberegister PV Erzeugung
-  limitArray ($data{$name}{current}{genslidereg}, $slidenummax);
+  limitArray ($data{$name}{current}{genslidereg}, SLIDENUMMAX);
 
   writeToHistory ( { paref => $paref, key => 'pvrl', val => $ethishoursum, hour => $nhour, valid => $aln } );    # valid=1: beim Learning berücksichtigen, 0: nicht
 
@@ -8848,7 +8944,7 @@ sub _transferAPIRadiationValues {
           $aivar    = sprintf "%.0f", (100 * $pvaifc / $est) if($est);                        # Übereinstimmungsgrad KI Forecast zu API Forecast in %
 
           if ($msg eq 'accurate') {                                                           # KI liefert 'accurate' Treffer -> verwenden
-              if ($airn >= $aiAccTRNMin || ($aivar >= $aiAccLowLim && $aivar <= $aiAccUpLim)) {
+              if ($airn >= AIACCTRNMIN || ($aivar >= AIACCLOWLIM && $aivar <= AIACCUPLIM)) {
                   $data{$name}{nexthours}{$nhtstr}{aihit} = 1;
                   $pvfc  = $pvaifc;
                   $useai = 1;
@@ -8857,7 +8953,7 @@ sub _transferAPIRadiationValues {
               }
           }
           elsif ($msg eq 'spreaded') {                                                        # Abweichung AI von Standardvorhersage begrenzen
-              if ($airn >= $aiSpreadTRNMin || ($aivar >= $aiSpreadLowLim && $aivar <= $aiSpreadUpLim)) {
+              if ($airn >= AISPREADTRNMIN || ($aivar >= AISPREADLOWLIM && $aivar <= AISPREADUPLIM)) {
                   $data{$name}{nexthours}{$nhtstr}{aihit} = 1;
                   $pvfc  = $pvaifc;
                   $useai = 1;
@@ -8972,7 +9068,7 @@ sub __calcPVestimates {
   my $reld        = $fd == 0 ? "today" : $fd == 1 ? "tomorrow" : "unknown";
   my $rr1c        = NexthoursVal   ($hash, "NextHour".sprintf ("%02d",$num), "rr1c",            0);   # Gesamtniederschlag während der letzten Stunde kg/m2
   my $wcc         = NexthoursVal   ($hash, "NextHour".sprintf ("%02d",$num), "wcc",             0);   # effektive Wolkendecke nächste Stunde X
-  my $temp        = NexthoursVal   ($hash, "NextHour".sprintf ("%02d",$num), "temp", $tempbasedef);   # vorhergesagte Temperatur Stunde X
+  my $temp        = NexthoursVal   ($hash, "NextHour".sprintf ("%02d",$num), "temp", TEMPBASEDEF);   # vorhergesagte Temperatur Stunde X
   my ($acu, $aln) = isAutoCorrUsed ($name);
 
   $paref->{wcc}  = $wcc;
@@ -9165,8 +9261,8 @@ sub ___calcPeaklossByTemp {
   my $wcc   = $paref->{wcc}  // return (0,0);                                               # vorhergesagte Wolkendecke Stunde X
   my $temp  = $paref->{temp} // return (0,0);                                               # vorhergesagte Temperatur Stunde X
 
-  my $modtemp  = $temp + ($tempmodinc * (1 - ($wcc/100)));                                  # kalkulierte Modultemperatur
-  my $peakloss = sprintf "%.2f", $tempcoeffdef * ($modtemp - $tempbasedef) * $peak / 100;
+  my $modtemp  = $temp + (TEMPMODINC * (1 - ($wcc/100)));                                   # kalkulierte Modultemperatur
+  my $peakloss = sprintf "%.2f", TEMPCOEFFDEF * ($modtemp - TEMPBASEDEF) * $peak / 100;
 
 return ($peakloss, $modtemp);
 }
@@ -9211,7 +9307,7 @@ sub _transferProducerValues {
 
   my $hash  = $defs{$name};
 
-  for my $pn (1..$maxproducer) {
+  for my $pn (1..MAXPRODUCER) {
       $pn = sprintf "%02d", $pn;
       my ($err, $prdev, $h) = isDeviceValid ( { name => $name, obj => 'setupOtherProducer'.$pn, method => 'attr' } );
       next if($err);
@@ -9511,7 +9607,7 @@ sub _transferBatteryValues {
   delete $data{$name}{current}{batpoweroutsum}; 
   delete $data{$name}{current}{batcapsum};  
   
-  for my $bn (1..$maxbatteries) {
+  for my $bn (1..MAXBATTERIES) {
       $bn = sprintf "%02d", $bn;
   
       my ($err, $badev, $h) = isDeviceValid ( { name => $name, obj => 'setupBatteryDev'.$bn, method => 'attr' } );
@@ -9675,7 +9771,7 @@ sub _transferBatteryValues {
   if ($num) {
       my $soctotal = sprintf "%.0f", ($socwhsum / $bcapsum * 100) if($bcapsum);            # resultierender SoC (%) aller Batterien als "eine" 
       push @{$data{$name}{current}{batsocslidereg}}, $soctotal;                            # Schieberegister average SOC aller Batterien
-      limitArray ($data{$name}{current}{batsocslidereg}, $slidenummax);
+      limitArray ($data{$name}{current}{batsocslidereg}, SLIDENUMMAX);
   
       $data{$name}{current}{batpowerinsum}  = $pbisum;                                     # summarische laufende Batterieladung
       $data{$name}{current}{batpoweroutsum} = $pbosum;                                     # summarische laufende Batterieentladung
@@ -9698,7 +9794,7 @@ sub _batSocTarget {
   
   my $hash = $defs{$name};
   
-  for my $bn (1..$maxbatteries) {
+  for my $bn (1..MAXBATTERIES) {
       $bn = sprintf "%02d", $bn;
   
       my ($err, $badev, $h) = isDeviceValid ( { name => $name, obj => 'setupBatteryDev'.$bn, method => 'attr' } );
@@ -9721,7 +9817,7 @@ sub _batSocTarget {
       $paref->{batnmb}    = $bn;
       $paref->{careCycle} = $careCycle;
       
-      __batSaveSocKeyFigures ($paref) if(!$ltsmsr || $soc >= $maxsoc || $soc >= $maxSoCdef || $oldd2care < 0);
+      __batSaveSocKeyFigures ($paref) if(!$ltsmsr || $soc >= $maxsoc || $soc >= MAXSOCDEF || $oldd2care < 0);
 
       my $nt         = '';
       my $chargereq  = 0;                                                                       # Ladeanforderung wenn SoC unter Minimum SoC gefallen ist
@@ -9731,8 +9827,8 @@ sub _batSocTarget {
       my $batymaxsoc = HistoryVal ($hash, $yday, 99, 'batmaxsoc'.$bn,       0);                 # gespeicherter max. SOC des Vortages
       my $batysetsoc = HistoryVal ($hash, $yday, 99, 'batsetsoc'.$bn, $lowSoc);                 # gespeicherter SOC Sollwert des Vortages
       
-      $target = $batymaxsoc <  $maxsoc ? $batysetsoc + $batSocChgDay :
-                $batymaxsoc >= $maxsoc ? $batysetsoc - $batSocChgDay :
+      $target = $batymaxsoc <  $maxsoc ? $batysetsoc + BATSOCCHGDAY :
+                $batymaxsoc >= $maxsoc ? $batysetsoc - BATSOCCHGDAY :
                 $batysetsoc;                                                                    # neuer Min SOC für den laufenden Tag
 
       ## erwartete PV ermitteln & Anteilsfaktor Bat an Gesamtbatteriekapazität anwenden
@@ -9752,7 +9848,7 @@ sub _batSocTarget {
           Log3 ($name, 1, "$name DEBUG> Bat $bn SoC Step1 - compare with SoC history -> preliminary new Target: $target %");
       }
       
-      ## Pflege-SoC (Soll SoC $maxSoCdef bei $batSocChgDay % Steigerung p. Tag)
+      ## Pflege-SoC (Soll SoC MAXSOCDEF bei BATSOCCHGDAY % Steigerung p. Tag)
       ###########################################################################
       my $sunset  = CurrentVal ($hash, 'sunsetTodayTs', $t);
       my $delayts = $sunset - 5400;                                                            # Pflege-SoC/Erhöhung SoC erst ab 1,5h vor Sonnenuntergang berechnen/anwenden
@@ -9763,7 +9859,8 @@ sub _batSocTarget {
       my $days2care = floor       (($ntsmsc - $t) / 86400);                                    # verbleibende Tage bis der Batterie Pflege-SoC (default 95%) erreicht sein soll
       my $docare    = 0;                                                                       # keine Zwangsanwendung care SoC
       
-      my $whneed    = ($maxsoc / 100 * $batinstcap) - ($soc / 100 * $batinstcap);        # benötigte Ladeenergie in Wh bis $maxsoc
+      my $whneed    = ($maxsoc / 100 * $batinstcap) - ($soc / 100 * $batinstcap);              # benötigte Ladeenergie in Wh bis $maxsoc
+      $whneed       = $whneed < 0 ? 0 : $whneed;
       $whneed       = sprintf "%.0f", $whneed;
       
       if ($t > $delayts || $pvexpect < $whneed || !$days2care) {
@@ -9771,7 +9868,7 @@ sub _batSocTarget {
           __batSaveSocKeyFigures ($paref);
           delete $paref->{days2care};
 
-          $careSoc = $maxsoc - ($days2care * $batSocChgDay);                                   # Pflege-SoC um rechtzeitig den $maxsoc zu erreichen bei 5% Steigerung pro Tag
+          $careSoc = $maxsoc - ($days2care * BATSOCCHGDAY);                                    # Pflege-SoC um rechtzeitig den $maxsoc zu erreichen bei 5% Steigerung pro Tag
           $careSoc = $careSoc < $lowSoc ? $lowSoc : $careSoc;
           
           if ($careSoc >= $target) {
@@ -9804,7 +9901,7 @@ sub _batSocTarget {
           $newtarget = $careSoc;
       }
       
-      my $logadd     = '';
+      my $logadd = '';
 
       if ($newtarget > $csopt && $t > $delayts) {                                              # Erhöhung des SoC (wird ab Sonnenuntergang angewendet)
           $target = $newtarget;
@@ -9877,8 +9974,8 @@ sub __parseAttrBatSoc {
   my ($pa,$ph)  = parseParams ($cgbt);
   my $lowSoc    = $ph->{lowSoc};
   my $upSoc     = $ph->{upSoC};
-  my $maxsoc    = $ph->{maxSoC}    // $maxSoCdef;                            # optional (default: $maxSoCdef)
-  my $careCycle = $ph->{careCycle} // $carecycledef;                         # Ladungszyklus (Maintenance) für maxSoC in Tagen
+  my $maxsoc    = $ph->{maxSoC}    // MAXSOCDEF;                                          # optional (default: MAXSOCDEF)
+  my $careCycle = $ph->{careCycle} // CARECYCLEDEF;                                       # Ladungszyklus (Maintenance) für maxSoC in Tagen
 
 return ($lowSoc, $upSoc, $maxsoc, $careCycle);
 }
@@ -9926,6 +10023,7 @@ sub _batChargeRecmd {
   my $paref = shift;
   my $name  = $paref->{name};
   my $chour = $paref->{chour};
+  my $t     = $paref->{t};
   
   return if(!isBatteryUsed ($name));
   
@@ -9940,7 +10038,7 @@ sub _batChargeRecmd {
   
   ## Inverter Limits ermitteln
   ##############################
-  for my $in (1..$maxinverter) {                           
+  for my $in (1..MAXINVERTER) {                           
       $in       = sprintf "%02d", $in;
       my $iname = InverterVal ($hash, $in, 'iname', '');
       next if(!$iname); 
@@ -9960,7 +10058,7 @@ sub _batChargeRecmd {
   
   ## Schleife über alle Batterien
   #################################
-  for my $bn (1..$maxbatteries) {                                                                # für jede Batterie
+  for my $bn (1..MAXBATTERIES) {                                                                # für jede Batterie
       $bn = sprintf "%02d", $bn;
   
       my ($err, $badev, $h) = isDeviceValid ( { name => $name, obj => 'setupBatteryDev'.$bn, method => 'attr' } );
@@ -10038,14 +10136,16 @@ sub _batChargeRecmd {
           ## Ladefreigabe
           #################
           my $whneed   = $batinstcap - $socwh;
+          my $maxfctim = timestringToTimestamp (ReadingsVal ($name, 'Today_MaxPVforecastTime', '')) // $t;
+          
           my $sfmargin = $whneed * 0.25;                                                         # Sicherheitszuschlag: X% der benötigten Ladeenergie (Wh)
           
-          if ( $whneed + $sfmargin >= $spday  )      {$crel = 1}                                 # Ladefreigabe wenn benötigte Ladeenergie >= Restüberschuß des Tages zzgl. Sicherheitsaufschlag
-          if ( !$num && $pvCu - $curcon >= $inplim ) {$crel = 1}                                 # Ladefreigabe wenn akt. PV Leistung >= WR-Leistungsbegrenzung
+          if ( $whneed + $sfmargin >= $spday || $t >  $maxfctim) {$crel = 1}                     # Ladefreigabe wenn benötigte Ladeenergie >= Restüberschuß des Tages zzgl. Sicherheitsaufschlag
+          if ( !$num && ($pvCu - $curcon) >= $inplim )           {$crel = 1}                     # Ladefreigabe wenn akt. PV Leistung >= WR-Leistungsbegrenzung
           
           ## SOC-Prognose
           #################                                                                         
-          $socwh += $crel ? ($pvfc - $confc) * $storeffdef : -$confc / $storeffdef;              # PV Prognose nur einbeziehen wenn Ladefreigabe                                                                
+          $socwh += $crel ? ($pvfc - $confc) * STOREFFDEF : -$confc / STOREFFDEF;              # PV Prognose nur einbeziehen wenn Ladefreigabe                                                                
           
           $socwh  = $socwh < $lowSocwh    ? $lowSocwh    :
                     $socwh < $batoptsocwh ? $batoptsocwh :                                       # SoC Prognose in Wh
@@ -10198,7 +10298,7 @@ sub _createSummaries {
   my $pvre = int $todaySumRe->{PV};
 
   push @{$data{$name}{current}{h4fcslidereg}}, int $next4HoursSum->{PV};                                # Schieberegister 4h Summe Forecast
-  limitArray ($data{$name}{current}{h4fcslidereg}, $slidenummax);
+  limitArray ($data{$name}{current}{h4fcslidereg}, SLIDENUMMAX);
 
   my $gcon    = CurrentVal ($hash, 'gridconsumption',         0);                                       # aktueller Netzbezug
   my $tconsum = CurrentVal ($hash, 'tomorrowconsumption', undef);                                       # Verbrauchsprognose für folgenden Tag
@@ -10207,7 +10307,7 @@ sub _createSummaries {
   my $batin  = 0;
   my $batout = 0;
   
-  for my $bn (1..$maxbatteries) {
+  for my $bn (1..MAXBATTERIES) {
       $bn = sprintf "%02d", $bn;
       $batin  += BatteryVal ($hash, $bn, 'bpowerin',  0);                                               # Summe momentane Batterieladung
       $batout += BatteryVal ($hash, $bn, 'bpowerout', 0);                                               # Summe momentane Batterieentladung
@@ -10216,7 +10316,7 @@ sub _createSummaries {
   my $pvgen   = 0;
   my $pv2grid = 0;                                                                                      # PV-Erzeugung zu Grid-only
 
-  for my $in (1..$maxinverter) {                                                                        # Summe alle Inverter
+  for my $in (1..MAXINVERTER) {                                                                        # Summe alle Inverter
       $in      = sprintf "%02d", $in;
       my $pvi  = InverterVal ($hash, $in, 'igeneration', 0);
       my $feed = InverterVal ($hash, $in, 'ifeed',      '');
@@ -10226,7 +10326,7 @@ sub _createSummaries {
   
   my $othprod = 0;                                                                                      # Summe Otherproducer
 
-  for my $pn (1..$maxproducer) {                                                                        # Erzeugung sonstiger Producer hinzufügen
+  for my $pn (1..MAXPRODUCER) {                                                                        # Erzeugung sonstiger Producer hinzufügen
       $pn       = sprintf "%02d", $pn;
       $othprod += ProducerVal ($hash, $pn, 'pgeneration', 0);
   }
@@ -10252,7 +10352,7 @@ sub _createSummaries {
   $data{$name}{current}{surplus}             = $surplus;
   
   push @{$data{$name}{current}{surplusslidereg}}, $surplus;                                             # Schieberegister PV Überschuß
-  limitArray ($data{$name}{current}{surplusslidereg}, $splslidenummax);
+  limitArray ($data{$name}{current}{surplusslidereg}, SPLSLIDEMAX);
 
   storeReading ('Current_GridFeedIn',           (int $gfeedin).       ' W');                            # V 1.37.0
   storeReading ('Current_GridConsumption',      (int $gcon).          ' W');                            # V 1.37.0
@@ -10506,7 +10606,7 @@ sub __calcEnergyPieces {
       delete $data{$name}{consumers}{$c}{epiecHist};
       delete $data{$name}{consumers}{$c}{epiecHour};
 
-      for my $h (1..$epiecMaxCycles) {
+      for my $h (1..EPIECMAXCYCLES) {
           delete $data{$name}{consumers}{$c}{"epiecHist_".$h};
           delete $data{$name}{consumers}{$c}{"epiecHist_".$h."_hours"};
       }
@@ -10514,8 +10614,8 @@ sub __calcEnergyPieces {
 
   delete $data{$name}{consumers}{$c}{epieces};
 
-  my $cotype  = ConsumerVal ($hash, $c, "type",    $defctype  );
-  my $mintime = ConsumerVal ($hash, $c, "mintime", $defmintime);
+  my $cotype  = ConsumerVal ($hash, $c, "type",      DEFCTYPE);
+  my $mintime = ConsumerVal ($hash, $c, "mintime", DEFMINTIME);
 
   if (isSunPath ($hash, $c)) {                                                                 # SunPath ist in mintime gesetzt
       my ($riseshift, $setshift) = sunShift    ($hash, $c);
@@ -10595,7 +10695,7 @@ sub ___csmSpecificEpieces {
       if (ConsumerVal ($hash, $c, "epiecHour", -1) < 0) {                                               # neue Aufzeichnung
           $data{$name}{consumers}{$c}{epiecStartTime} = $t;
           $data{$name}{consumers}{$c}{epiecHist}     += 1;
-          $data{$name}{consumers}{$c}{epiecHist}      = 1 if(ConsumerVal ($hash, $c, "epiecHist", 0) > $epiecMaxCycles);
+          $data{$name}{consumers}{$c}{epiecHist}      = 1 if(ConsumerVal ($hash, $c, "epiecHist", 0) > EPIECMAXCYCLES);
 
           $ecycle = "epiecHist_".ConsumerVal ($hash, $c, "epiecHist", 0);
 
@@ -10621,7 +10721,7 @@ sub ___csmSpecificEpieces {
       my $ediff                                               = $etot - ConsumerVal ($hash, $c, "epiecStartEtotal", 0);
       $data{$name}{consumers}{$c}{$ecycle}{$epiecHour} = sprintf '%.2f', $ediff;
       $data{$name}{consumers}{$c}{epiecHour}           = $epiecHour;
-      $data{$name}{consumers}{$c}{$epiecHist_hours}    = $ediff ? $epiecHour : $epiecHour - 1;    # wenn mehr als 1 Wh verbraucht wird die Stunde gezählt
+      $data{$name}{consumers}{$c}{$epiecHist_hours}    = $ediff ? $epiecHour : $epiecHour - 1;           # wenn mehr als 1 Wh verbraucht wird die Stunde gezählt
 
       debugLog ($paref, "epiecesCalc", qq{specificEpieces -> consumer "$c" - energy consumption in operating hour $epiecHour (ediff): $ediff});
   }
@@ -10629,21 +10729,21 @@ sub ___csmSpecificEpieces {
       if (ConsumerVal ($hash, $c, "epiecHour", 0) > 0) {
           my $hours = 0;
 
-          for my $h (1..$epiecMaxCycles) {                                                               # durchschnittliche Betriebsstunden über alle epieces ermitteln und aufrunden
+          for my $h (1..EPIECMAXCYCLES) {                                                                # durchschnittliche Betriebsstunden über alle epieces ermitteln und aufrunden
               $hours += ConsumerVal ($hash, $c, "epiecHist_".$h."_hours", 0);
           }
 
-          my $avghours                                   = ceil ($hours / $epiecMaxCycles);
-          $data{$name}{consumers}{$c}{epiecAVG_hours} = $avghours;                                    # durchschnittliche Betriebsstunden pro Zyklus
+          my $avghours                                   = ceil ($hours / EPIECMAXCYCLES);
+          $data{$name}{consumers}{$c}{epiecAVG_hours} = $avghours;                                       # durchschnittliche Betriebsstunden pro Zyklus
 
           debugLog ($paref, "epiecesCalc", qq{specificEpieces -> consumer "$c" - Average operating hours per cycle (epiecAVG_hours): $avghours});
 
-          delete $data{$name}{consumers}{$c}{epiecAVG};                                               # Durchschnitt für epics ermitteln
+          delete $data{$name}{consumers}{$c}{epiecAVG};                                                  # Durchschnitt für epics ermitteln
 
           for my $hour (1..$avghours) {                                                                  # jede Stunde durchlaufen
               my $hoursE = 1;
 
-              for my $h (1..$epiecMaxCycles) {                                                           # jedes epiec durchlaufen
+              for my $h (1..EPIECMAXCYCLES) {                                                            # jedes epiec durchlaufen
                   my $ecycle = "epiecHist_".$h;
 
                   if (defined $data{$name}{consumers}{$c}{$ecycle}{$hour}) {
@@ -10700,7 +10800,7 @@ sub __planInitialSwitchTime {
                       qq{ alias: }.ConsumerVal ($hash, $c, 'alias', ''));
   }
 
-  if (ConsumerVal ($hash, $c, 'type', $defctype) eq 'noSchedule') {
+  if (ConsumerVal ($hash, $c, 'type', DEFCTYPE) eq 'noSchedule') {
       debugLog ($paref, "consumerPlanning", qq{consumer "$c" - }.$hqtxt{scnp}{EN});
 
       $paref->{ps} = 'noSchedule';
@@ -10740,11 +10840,11 @@ sub ___noPlanRelease {
            $dnp = qq{do not plan because off "todayDoneAPIcalls" is not set};
       }
   }
-  else {                                                                                   # Planung erst ab "$leadtime" vor Sonnenaufgang freigeben
+  else {                                                                                   # Planung erst ab "LEADTIME" vor Sonnenaufgang freigeben
       my $sunrise = CurrentVal ($hash, 'sunriseTodayTs', 32529945600);
 
-      if ($t < $sunrise - $leadtime) {
-          $dnp = "do not plan because off current time is less than sunrise minus ".($leadtime / 3600)." hour";
+      if ($t < $sunrise - LEADTIME) {
+          $dnp = "do not plan because off current time is less than sunrise minus ".(LEADTIME / 3600)." hour";
       }
   }
 
@@ -10867,7 +10967,7 @@ sub ___doPlanning {
 
   my $mode         = getConsumerPlanningMode ($hash, $c);                                              # Planungsmode 'can' oder 'must'
   my $calias       = ConsumerVal ($hash, $c, 'alias',            '');
-  my $mintime      = ConsumerVal ($hash, $c, 'mintime', $defmintime);                                  # Einplanungsdauer
+  my $mintime      = ConsumerVal ($hash, $c, 'mintime',  DEFMINTIME);                                  # Einplanungsdauer
   my $oldplanstate = ConsumerVal ($hash, $c, 'planstate',        '');                                  # V. 1.35.0
   
   debugLog ($paref, "consumerPlanning", qq{consumer "$c" - mode: $mode, mintime: $mintime, relevant method: surplus});
@@ -10988,7 +11088,6 @@ return;
 sub ___saveEhodpieces {
   my $paref   = shift;
   my $name    = $paref->{name};
-  my $type    = $paref->{type};
   my $c       = $paref->{consumer};
   my $startts = $paref->{startts};                                           # Unix Timestamp für geplanten Switch on
   my $stopts  = $paref->{stopts};                                            # Unix Timestamp für geplanten Switch off
@@ -11011,7 +11110,7 @@ sub ___saveEhodpieces {
           last;
       }
 
-      $chod                                                 = sprintf '%02d', $chod;
+      $chod                                          = sprintf '%02d', $chod;
       $data{$name}{consumers}{$c}{ehodpieces}{$chod} = sprintf '%.2f', $ep if($ep);
 
       $p++;
@@ -11489,7 +11588,7 @@ sub ___switchConsumerOff {
   my $stopts  = ConsumerVal ($hash, $c, "planswitchoff", undef);                                  # geplante Unix Stopzeit
   my $auto    = ConsumerVal ($hash, $c, "auto",              1);
   my $calias  = ConsumerVal ($hash, $c, "alias",            "");                                  # Consumer Device Alias
-  my $hyst    = ConsumerVal ($hash, $c, "hysteresis", $defhyst);                                  # Hysterese
+  my $hyst    = ConsumerVal ($hash, $c, "hysteresis",  DEFHYST);                                  # Hysterese
 
   my $mode                     = getConsumerPlanningMode ($hash, $c);                             # Planungsmode 'can' oder 'must'
   my $offcom                   = ConsumerVal             ($hash, $c, 'offcom', '');               # Set Command für "off"
@@ -11585,7 +11684,7 @@ sub ___setConsumerSwitchingState {
   debugLog ($paref, "consumerSwitching${c}", qq{consumer "$c" - current planning state: $simpCstat});
 
   if (isConsumerPhysOn ($hash, $c) && $simpCstat eq 'starting') {
-      my $mintime = ConsumerVal ($hash, $c, "mintime", $defmintime);
+      my $mintime = ConsumerVal ($hash, $c, "mintime", DEFMINTIME);
 
       if (isSunPath ($hash, $c)) {                                                                 # SunPath ist in mintime gesetzt
           my (undef, $setshift) = sunShift   ($hash, $c);
@@ -11958,7 +12057,7 @@ sub _calcConsumptionForecast {
        my $tomcon                                 = sprintf "%.0f", medianArray (\@cona);
        $data{$name}{current}{tomorrowconsumption} = $tomcon;                                           # prognostizierter Verbrauch (Median) aller (gleicher) Wochentage
 
-       debugLog ($paref, 'consumption|consumption_long', "estimated Consumption for tomorrow: $tomcon, days for avg: $dnum");
+       debugLog ($paref, 'consumption|consumption_long', "estimated Consumption for tomorrow: $tomcon, days for median: $dnum");
   }
   else {
       my $lang = $paref->{lang};
@@ -12026,7 +12125,7 @@ sub _calcConsumptionForecast {
               }
           }
 
-          push @conhfcex, ($hcon - $consumerco) if($hcon >= $consumerco);                                               # prognostizierter Verbrauch (Median) Ex registrierter Verbraucher
+          push @conhfcex, ($hcon - $consumerco) if($hcon >= $consumerco);                           # prognostizierter Verbrauch (Median) Ex registrierter Verbraucher
           push @conhfc,   $hcon;
           
           $dnum++;
@@ -12045,6 +12144,135 @@ sub _calcConsumptionForecast {
 
            debugLog ($paref, 'consumption|consumption_long', "estimated Consumption for $nhday -> starttime: $nhtime, confc: $conavg, days for avg: $dnum, hist. consumption registered consumers: ".sprintf "%.2f", $consumerco);
       }
+  }
+
+return;
+}
+
+################################################################
+#     Energieverbrauch Vorhersage kalkulieren (Median)
+################################################################
+sub _calcConsumptionForecast_circular {
+  my $paref   = shift;
+  my $name    = $paref->{name};
+  my $chour   = $paref->{chour};
+  my $t       = $paref->{t};
+  my $day     = $paref->{day};                                                                          # aktuelles Tagdatum (01...31)
+  my $dayname = $paref->{dayname};                                                                      # aktueller Tagname
+
+  my $hash    = $defs{$name};
+  my $acref   = $data{$name}{consumers};
+  my $swdfcfc = AttrVal ($name, 'affectConsForecastIdentWeekdays', 0);                                  # nutze nur gleiche Wochentage (Mo...So) für Verbrauchsvorhersage
+    
+  ## Beachtung der letzten X Tage falls gesetzt
+  ###############################################
+  my $acld = AttrVal ($name, 'affectConsForecastLastDays', 0);
+
+  ## Verbrauchsvorhersage für den kommenden Tag
+  ##############################################
+  my $dt         = timestringsFromOffset ($t, 86400);
+  my $tomdayname = $dt->{dayname};                                                                      # Wochentagsname kommender Tag
+  
+  my (@cona, $exconfc, $csme, %usage);
+  
+  $usage{tom}{con} = 0;
+
+  debugLog ($paref, 'consumption|consumption_long', "################### Consumption forecast for the next day (new median) ###################");
+
+  ## Verbrauch der hod-Stunden 01..24 u. gesamten Tag ermitteln
+  ###############################################################
+  for my $h (1..24) {                                                                                   # Median für jede Stunde / Tag berechnen
+      my $hh = sprintf "%02d", $h;
+      
+      my @conh;
+      
+      if ($swdfcfc) {                                                                                   # nur gleiche Tage (Mo...So) einbeziehen der Stunde
+          push @conh, @{$data{$name}{circular}{$hh}{con_all}{"$tomdayname"}};
+      }
+      else {
+          for my $dy (keys %{$data{$name}{circular}{$hh}{con_all}}) {                                   # alle aufgezeichneten Wochentage in der Stunde berücksichtigen
+              push @conh, @{$data{$name}{circular}{$hh}{con_all}{$dy}};
+          }
+      }
+
+      my $hnum = scalar @conh;
+      
+      if ($hnum) {
+          my $hcon          = sprintf "%.0f", medianArray (\@conh);                                    
+          $usage{$hh}{con}  = $hcon;                                                                    # prognostizierter Verbrauch (Median) der Stunde hh (Hour of Day)
+          $usage{$hh}{num}  = $hnum;
+          $usage{tom}{con} += $hcon;                                                                    # Summe prognostizierter Verbrauch (Median) des Tages 
+          $usage{tom}{num} += $hnum;
+      }
+  }
+  
+  ## historische Werte Verbraucher exkludieren / geplante inkludieren
+  #####################################################################
+  my $tomnum = $usage{tom}{num} // 0;
+  
+  if ($tomnum) {
+      my $exnum = 0;
+      my $ex    = 0;
+      
+      for my $n (sort{$a<=>$b} keys %{$data{$name}{pvhist}}) {
+          next if ($n eq $day);                                                                        # aktuellen (unvollständigen) Tag nicht berücksichtigen
+
+          if ($swdfcfc) {                                                                              # nur gleiche Tage (Mo...So) einbeziehen
+              my $hdn = HistoryVal ($hash, $n, 99, 'dayname', undef);
+              next if(!$hdn || $hdn ne $tomdayname);
+          }
+
+          for my $c (sort{$a<=>$b} keys %{$acref}) {                                                   # historischer Verbrauch aller registrierten Verbraucher aufaddieren
+              $exconfc = ConsumerVal ($hash, $c, 'exconfc', 0);                                        # 1 -> Consumer Verbrauch von Erstelleung der Verbrauchsprognose ausschließen
+
+              if ($exconfc) {
+                  ## Tageswert Excludes finden und summieren
+                  ############################################
+                  $csme = HistoryVal ($hash, $n, 99, "csme${c}", 0);
+                  
+                  if ($csme > 0) {
+                      $ex   += $csme;
+                      $exnum++;
+                  
+                      debugLog ($paref, 'consumption|consumption_long', "Consumer '$c' hist cons registered by 'exconfc' for excl. - day: $n, csme: $csme");
+                  }
+                  
+                  ## hist. On-Stunden aller Tage aufnehmen
+                  ##########################################
+                  for my $h (1..24) {
+                      my $hh = sprintf "%02d", $h;
+                      $csme  = HistoryVal ($hash, $n, $hh, "csme${c}", 0);
+                  
+                      if ($csme) {
+                          $usage{$hh}{histcon} += $csme;
+                          $usage{$hh}{histnum}++;
+                      }
+                  }              
+              }
+          }
+      }
+      
+      for my $h (1..24) {                          
+          my $hh = sprintf "%02d", $h;
+          
+          if (defined $usage{$hh}{histnum}) {
+              my $exhcon        = sprintf "%.0f", ($usage{$hh}{histcon} / $usage{$hh}{histnum});       # durchschnittlichen Verbrauchswert 
+              $usage{$hh}{con} -= $exhcon;
+          
+              debugLog ($paref, 'consumption|consumption_long', "excl. $exhcon Wh for Hour $hh, Considered value numbers: ".$usage{$hh}{histnum});
+          }
+      
+          debugLog ($paref, 'consumption|consumption_long', "estimated cons of Hour $hh: ".$usage{$hh}{con}." Wh, Considered value numbers: ".$usage{$hh}{num});
+      } 
+      
+      $ex               = sprintf "%.0f", ($ex / $exnum) if($exnum);                                   # Ex Tageswert Durchschnitt bilden
+      $usage{tom}{con} -= $ex;
+      
+      debugLog ($paref, 'consumption|consumption_long', "estimated cons Tomorrow: ".$usage{tom}{con}." Wh, Considered value numbers: $tomnum, exclude: $ex Wh (avg of $exnum)");
+  }
+  else {
+      my $lang = $paref->{lang};
+      # $data{$name}{current}{tomorrowconsumption} = $hqtxt{wfmdcf}{$lang};
   }
 
 return;
@@ -12107,7 +12335,7 @@ sub __evaluateArray {
   my @aa    = ();
   @aa       = @{$aaref} if (ref $aaref eq 'ARRAY');
 
-  return if(scalar @aa < $slidenummax);
+  return if(scalar @aa < SLIDENUMMAX);
 
   my $gen1   = $aa[0];
   my $gen2   = $aa[1];
@@ -12208,10 +12436,13 @@ return;
 }
 
 ################################################################
-#  Korrekturen und Qualität berechnen / speichern
-#  sowie AI Quellen Daten hinzufügen
+#  Werte berechnen und speichern die nach jeder vollen Stunde
+#  nur einmal ermittelt werden:
+#  - PV-Prognosekorrekturfaktoren und deren Qualität 
+#  - AI Quellendaten hinzufügen
+#  - Verbrauchswerte für Medianauswertung
 ################################################################
-sub _calcValueImproves {
+sub _calcDataEveryFullHour {
   my $paref = shift;
   my $name  = $paref->{name};
   my $chour = $paref->{chour};
@@ -12247,20 +12478,39 @@ sub _calcValueImproves {
   $paref->{acu} = $acu;
   $paref->{aln} = $aln;
 
-  for my $h (1..23) {
-      next if(!$chour || $h > $chour);
-
-      $paref->{cpcf}  = ReadingsVal ($name, 'pvCorrectionFactor_'.sprintf("%02d",$h), '');        # aktuelles pvCorf-Reading
-      $paref->{aihit} = CircularVal ($hash, sprintf("%02d",$h), 'aihit',  0);                     # AI verwendet?
+  for my $h (0..23) {
+      next if($h > $chour);
+      
+      if (int $chour == 0) {                                                                      # 00:XX -> Stunde 24 des Vortages speichern
+          my $dt             = timestringsFromOffset ($t, -3600);
+          $paref->{yt}       = $t - 3600;                                                         # Timestamp Vortag
+          $paref->{yday}     = $dt->{day};                                                        # vorheriger Tag (range 01 .. 31)
+          $paref->{ydayname} = $dt->{dayname};
+          $h                 = 24;                                                                # Stunde 24 am Vortag!
+      }
+      
+      next if(!$h);
+      
+      my $hh          = sprintf "%02d", $h;
+      $paref->{cpcf}  = ReadingsVal ($name, 'pvCorrectionFactor_'.$hh, '');                       # aktuelles pvCorf-Reading
+      $paref->{aihit} = CircularVal ($hash, $hh, 'aihit',  0);                                    # AI verwendet?
       $paref->{h}     = $h;
 
-      _calcCaQcomplex   ($paref);                                                                 # Korrekturberechnung mit Bewölkung duchführen/speichern
+      next if(ReadingsVal ($name, '.signaldone_'.$hh, '') eq "done");      
+      
       _calcCaQsimple    ($paref);                                                                 # einfache Korrekturberechnung duchführen/speichern
+      _calcCaQcomplex   ($paref);                                                                 # Korrekturberechnung mit Bewölkung duchführen/speichern
       _addHourAiRawdata ($paref);                                                                 # AI Raw Data hinzufügen
+      _addCon2CircArray ($paref);                                                                 # Hausverbrauch der vergangenen Stunde zum con-Array im Circular Speicher hinzufügen
+      
+      storeReading ('.signaldone_'.$hh, 'done');                                                  # Sperrsignal (erledigt) setzen
 
       delete $paref->{h};
       delete $paref->{cpcf};
       delete $paref->{aihit};
+      delete $paref->{yday};
+      delete $paref->{ydayname};
+      delete $paref->{yt};
   }
 
   delete $paref->{aln};
@@ -12284,16 +12534,9 @@ sub _calcCaQcomplex {
   my $aihit = $paref->{aihit};
 
   my $hash = $defs{$name};
-  my $sr   = ReadingsVal ($name, '.pvCorrectionFactor_'.sprintf("%02d",$h).'_cloudcover', '');
-
-  if ($sr eq 'done') {
-      # Log3 ($name, 1, "$name DEBUG> Complex Corrf -> factor Hour: ".sprintf("%02d",$h)." already calculated");
-      return;
-  }
 
   if (!$aln) {
-      storeReading ('.pvCorrectionFactor_'.sprintf("%02d",$h).'_cloudcover', 'done');
-      debugLog     ($paref, 'pvCorrectionWrite', "Autolearning is switched off for hour: $h -> skip the recalculation of the complex correction factor");
+      debugLog ($paref, 'pvCorrectionWrite', "Autolearning is switched off for hour: $h -> skip the recalculation of the complex correction factor");
       return;
   }
   
@@ -12302,7 +12545,6 @@ sub _calcCaQcomplex {
   my $pvfc  = CircularVal ($hash, $hh, 'pvapifc', 0);                                  # vorhergesagte PV Energie am Ende der vorherigen Stunde
 
   if (!$pvrl || !$pvfc) {
-      storeReading ('.pvCorrectionFactor_'.$hh.'_cloudcover', 'done');
       return;
   }
 
@@ -12324,21 +12566,13 @@ sub _calcCaQcomplex {
   $paref->{sabin}  = $sabin;
   $paref->{calc}   = 'Complex';
 
-  my ($oldfac, $factor, $dnum);
-  if (!ReadingsVal ($name, '.migrated', 0)) {                                         # Daten wurden noch nicht migriert
-      ($oldfac, $factor, $dnum) = __calcNewFactor ($paref);
-  }
-  else {
-      ($oldfac, $factor, $dnum) = __calcNewFactor_migrated ($paref);
-  }
+  my ($oldfac, $factor, $dnum) = __calcNewFactor_migrated ($paref);                  # migrierte Daten verwenden
 
   delete $paref->{pvrl};
   delete $paref->{pvfc};
   delete $paref->{crang};
   delete $paref->{sabin};
   delete $paref->{calc};
-
-  storeReading ('.pvCorrectionFactor_'.$hh.'_cloudcover', 'done');
 
   $aihit = $aihit ? ' AI result used,' : '';
 
@@ -12370,16 +12604,9 @@ sub _calcCaQsimple {
 
   my $hash = $defs{$name};
   my $hh   = sprintf "%02d", $h;
-  my $sr   = ReadingsVal ($name, '.pvCorrectionFactor_'.$hh.'_apipercentil', '');
-
-  if($sr eq "done") {
-      # debugLog ($paref, 'pvCorrectionWrite', "Simple Corrf factor Hour: ".$hh." already calculated");
-      return;
-  }
 
   if (!$aln) {
-      storeReading ('.pvCorrectionFactor_'.$hh.'_apipercentil', 'done');
-      debugLog     ($paref, 'pvCorrectionWrite', "Autolearning is switched off for hour: $h -> skip the recalculation of the simple correction factor");
+      debugLog ($paref, 'pvCorrectionWrite', "Autolearning is switched off for hour: $h -> skip the recalculation of the simple correction factor");
       return;
   }
 
@@ -12387,7 +12614,6 @@ sub _calcCaQsimple {
   my $pvfc = CircularVal ($hash, $hh, 'pvapifc', 0);
 
   if (!$pvrl || !$pvfc) {
-      storeReading ('.pvCorrectionFactor_'.$hh.'_apipercentil', 'done');
       return;
   }
 
@@ -12400,21 +12626,13 @@ sub _calcCaQsimple {
   $paref->{crang} = 'simple';
   $paref->{calc}  = 'Simple';
 
-  my ($oldfac, $factor, $dnum);
-  if (!ReadingsVal ($name, '.migrated', 0)) {                                         # Daten wurden noch nicht migriert
-      ($oldfac, $factor, $dnum) = __calcNewFactor ($paref);
-  }
-  else {
-      ($oldfac, $factor, $dnum) = __calcNewFactor_migrated ($paref);
-  }
-
+  my ($oldfac, $factor, $dnum) = __calcNewFactor_migrated ($paref);                   # migrierte Daten verwenden
+      
   delete $paref->{pvrl};
   delete $paref->{pvfc};
   delete $paref->{sabin};
   delete $paref->{crang};
   delete $paref->{calc};
-
-  storeReading ('.pvCorrectionFactor_'.$hh.'_apipercentil', 'done');
 
   $aihit = $aihit ? ' AI result used,' : '';
 
@@ -12431,91 +12649,34 @@ return;
 }
 
 ################################################################
-#    den neuen Korrekturfaktur berechnen
+#  den Hausverbrauch der vergangenen Stunde zum con-Array
+#  im Circular Speicher hinzufügen
 ################################################################
-sub __calcNewFactor {
-  my $paref = shift;
-  my $name  = $paref->{name};
-  my $type  = $paref->{type};
-  my $pvrl  = $paref->{pvrl};
-  my $pvfc  = $paref->{pvfc};
-  my $crang = $paref->{crang};
-  my $sabin = $paref->{sabin};
-  my $h     = $paref->{h};
-  my $calc  = $paref->{calc};
+sub _addCon2CircArray {
+  my $paref    = shift;
+  my $name     = $paref->{name};
+  my $h        = $paref->{h};
+  my $yday     = $paref->{yday};                                                  # vorheriger Tag (falls gesetzt)
+  my $day      = $paref->{day};                                                   # aktueller Tag (range 01 to 31)
+  my $dayname  = $paref->{dayname}; 
+  my $ydayname = $paref->{ydayname};
 
-  my $factor;
-  my $hash    = $defs{$name};
-  my $pvrlsum = $pvrl;
-  my $pvfcsum = $pvfc;
+  my $hash  = $defs{$name};
 
-  debugLog ($paref, 'pvCorrectionWrite', "$calc Corrf -> Start calculation correction factor for hour: $h");
-
-  my $hh                     = sprintf "%02d", $h;
-  my ($oldfac, $oldq)        = CircularSunCloudkorrVal ($hash, $hh, $sabin, $crang, 0);                # bisher definierter Korrekturfaktor / Qualität
-  my ($pvhis, $fchis, $dnum) = CircularSumVal          ($hash, $hh, $sabin, $crang, 0);
-  $oldfac                    = 1 if(1 * $oldfac == 0);                                            
+  $day      = $yday     if(defined $yday);                                        # der vergangene Tag soll verarbeitet werden
+  $dayname  = $ydayname if(defined $ydayname);                                    # Name des Vortages
+  my $hh    = sprintf "%02d", $h;
+  my $con   = HistoryVal ($hash, $day, $hh, 'con', 0);                            # Consumption der abgefragten Stunde
   
-  debugLog ($paref, 'pvCorrectionWrite', "$calc Corrf -> read historical values: pv real sum: $pvhis, pv forecast sum: $fchis, days sum: $dnum");
-
-  if ($dnum) {                                                                                        # Werte in History vorhanden -> haben Prio !
-      $dnum++;
-      $pvrlsum = $pvrl + $pvhis;
-      $pvfcsum = $pvfc + $fchis;
-      $pvrl    = $pvrlsum / $dnum;
-      $pvfc    = $pvfcsum / $dnum;
-      $factor  = sprintf "%.2f", ($pvrl / $pvfc);                                                     # Faktorberechnung: reale PV / Prognose
-  }
-  elsif ($oldfac && (!$pvhis || !$fchis)) {                                                           # Circular Hash liefert einen vorhandenen Korrekturfaktor aber keine gespeicherten PV-Werte
-      $dnum   = 1;
-      $factor = sprintf "%.2f", ($pvrl / $pvfc);
-      $factor = sprintf "%.2f", ($factor + $oldfac) / 2;
-  }
-  else {                                                                                              # ganz neuer Wert
-      $dnum    = 1;
-      $factor  = sprintf "%.2f", ($pvrl / $pvfc);
-  }
-
-  $factor = 1.00 if(1 * $factor == 0);                                                                # 0.00-Werte ignorieren (Schleifengefahr)
-
-  if (abs($factor - $oldfac) > $defmaxvar) {
-      $factor = sprintf "%.2f", ($factor > $oldfac ? $oldfac + $defmaxvar : $oldfac - $defmaxvar);
-      Log3 ($name, 3, "$name - new $calc correction factor calculated (limited by maximum Day Variance): $factor (old: $oldfac) for hour: $h");
-  }
-  else {
-      Log3 ($name, 3, "$name - new $calc correction factor for hour $h calculated: $factor (old: $oldfac)");
-  }
-
-  $pvrl    = sprintf "%.0f", $pvrl;
-  $pvfc    = sprintf "%.0f", $pvfc;
-  my $qual = __calcFcQuality ($pvfc, $pvrl);                                                          # Qualität der Vorhersage für die vergangene Stunde
-
-  debugLog ($paref, 'pvCorrectionWrite',                "$calc Corrf -> determined values - hour: $h, Sun Altitude range: $sabin, Cloud range: $crang, old factor: $oldfac, new factor: $factor, days: $dnum");
-  debugLog ($paref, 'pvCorrectionWrite|saveData2Cache', "$calc Corrf -> write correction values into Circular - hour: $h, Sun Altitude range: $sabin, Cloud range: $crang, factor: $factor, quality: $qual, days: $dnum");
-
-  if ($crang ne 'simple') {
-      my $idx = $sabin.'.'.$crang;                                                                    # value für pvcorrf Sonne Altitude
-      $data{$name}{circular}{$hh}{pvrlsum}{$idx} = $pvrlsum;                                          # PV Erzeugung Summe speichern
-      $data{$name}{circular}{$hh}{pvfcsum}{$idx} = $pvfcsum;                                          # PV Prognose Summe speichern
-      $data{$name}{circular}{$hh}{dnumsum}{$idx} = $dnum;                                             # Anzahl aller historischen Tade dieser Range
-      $data{$name}{circular}{$hh}{pvcorrf}{$idx} = $factor;
-      $data{$name}{circular}{$hh}{quality}{$idx} = $qual;
-  }
-  else {
-      $data{$name}{circular}{$hh}{pvrlsum}{$crang} = $pvrlsum;
-      $data{$name}{circular}{$hh}{pvfcsum}{$crang} = $pvfcsum;
-      $data{$name}{circular}{$hh}{dnumsum}{$crang} = $dnum;
-      $data{$name}{circular}{$hh}{pvcorrf}{$crang} = $factor;
-      $data{$name}{circular}{$hh}{quality}{$crang} = $qual;
-  }
+  push @{$data{$name}{circular}{$hh}{con_all}{"$dayname"}}, $con if($con >= 0);   # Wert zum Speicherarray hinzufügen
   
-  $oldfac = sprintf "%.2f", $oldfac;
-  
-return ($oldfac, $factor, $dnum);
+  debugLog ($paref, 'saveData2Cache', "add consumption into Array (con_all) in Circular - day: $day, hod: $hh, con: $con");
+
+return;
 }
 
 ################################################################
-#    den neuen Korrekturfaktur berechnen (neue Funktion)
+#   den neuen Korrekturfaktur berechnen (neue Median Funktion)
 ################################################################
 sub __calcNewFactor_migrated {
   my $paref = shift;
@@ -12573,8 +12734,8 @@ sub __calcNewFactor_migrated {
 
   ## max. Faktorsteigerung berücksichtigen
   ##########################################
-  if (abs($factor - $oldfac) > $defmaxvar) {
-      $factor = sprintf "%.2f", ($factor > $oldfac ? $oldfac + $defmaxvar : $oldfac - $defmaxvar);
+  if (abs($factor - $oldfac) > DEFMAXVAR) {
+      $factor = sprintf "%.2f", ($factor > $oldfac ? $oldfac + DEFMAXVAR : $oldfac - DEFMAXVAR);
       Log3 ($name, 3, "$name - new $calc correction factor calculated (limited by maximum Day Variance): $factor (old: $oldfac) for hour: $hh");
   }
   else {
@@ -12588,8 +12749,8 @@ sub __calcNewFactor_migrated {
   $pvfc    = sprintf "%.0f", $pvfc;
   my $qual = __calcFcQuality ($pvfc, $pvrl);                                                             # Qualität der Vorhersage für die vergangene Stunde
 
-  debugLog ($paref, 'pvCorrectionWrite',                "$calc Corrf -> determined values - hour: $h, Sun Altitude range: $sabin, Cloud range: $crang, old factor: $oldfac, new factor: $factor, days: $dnum");
-  debugLog ($paref, 'pvCorrectionWrite|saveData2Cache', "$calc Corrf -> write correction values into Circular - hour: $h, Sun Altitude range: $sabin, Cloud range: $crang, factor: $factor, quality: $qual, days: $dnum");
+  debugLog ($paref, 'pvCorrectionWrite',                "$calc Corrf -> determined values - hour: $hh, Sun Altitude range: $sabin, Cloud range: $crang, old factor: $oldfac, new factor: $factor, days: $dnum");
+  debugLog ($paref, 'pvCorrectionWrite|saveData2Cache', "$calc Corrf -> write correction values into Circular - hour: $hh, Sun Altitude range: $sabin, Cloud range: $crang, factor: $factor, quality: $qual, days: $dnum");
 
   ## neue Werte speichern
   #########################
@@ -12634,30 +12795,31 @@ return $hdv;
 #     Energieverbrauch des Hauses in History speichern
 ################################################################
 sub _saveEnergyConsumption {
-  my $paref  = shift;
-  my $name   = $paref->{name};
-  my $chour  = $paref->{chour};
-  my $debug  = $paref->{debug};
+  my $paref = shift;
+  my $name  = $paref->{name};
+  my $day   = $paref->{day};
+  my $chour = $paref->{chour};
+  my $debug = $paref->{debug};
 
-  my $shr     = sprintf "%02d", ($chour + 1);
-  my $pvrl    = ReadingsNum ($name, 'Today_Hour'.$shr.'_PVreal',          0);   # Reading enthält die Summe aller Inverterdevices
-  my $gfeedin = ReadingsNum ($name, 'Today_Hour'.$shr.'_GridFeedIn',      0);
-  my $gcon    = ReadingsNum ($name, 'Today_Hour'.$shr.'_GridConsumption', 0);
+  my $hod     = sprintf "%02d", ($chour + 1);
+  my $pvrl    = ReadingsNum ($name, 'Today_Hour'.$hod.'_PVreal',          0);   # Reading enthält die Summe aller Inverterdevices
+  my $gfeedin = ReadingsNum ($name, 'Today_Hour'.$hod.'_GridFeedIn',      0);
+  my $gcon    = ReadingsNum ($name, 'Today_Hour'.$hod.'_GridConsumption', 0);
   
   my $batin  = 0;
   my $batout = 0;
   
-  for my $bn (1..$maxbatteries) {
+  for my $bn (1..MAXBATTERIES) {
       $bn = sprintf "%02d", $bn;
-      $batin  += ReadingsNum ($name, 'Today_Hour'.$shr.'_BatIn_'.$bn,  0);
-      $batout += ReadingsNum ($name, 'Today_Hour'.$shr.'_BatOut_'.$bn, 0);
+      $batin  += ReadingsNum ($name, 'Today_Hour'.$hod.'_BatIn_'.$bn,  0);
+      $batout += ReadingsNum ($name, 'Today_Hour'.$hod.'_BatOut_'.$bn, 0);
   }
   
-  my $ppreal  = 0;
+  my $ppreal = 0;
 
-  for my $prn (1..$maxproducer) {                                               # V1.32.0 : Erzeugung sonstiger Producer (01..03) hinzufügen
+  for my $prn (1..MAXPRODUCER) {                                               # V1.32.0 : Erzeugung sonstiger Producer (01..03) hinzufügen
       $prn     = sprintf "%02d", $prn;
-      $ppreal += ReadingsNum ($name, 'Today_Hour'.$shr.'_PPreal_'.$prn, 0);
+      $ppreal += ReadingsNum ($name, 'Today_Hour'.$hod.'_PPreal_'.$prn, 0);
   }
   
   my $con     = $pvrl + $ppreal - $gfeedin + $gcon - $batin + $batout;
@@ -12673,7 +12835,7 @@ sub _saveEnergyConsumption {
           $pre = 'DEBUG> - WARNING -';
       }
 
-      Log3 ($name, $vl, "$name $pre The calculated Energy consumption of the house is negative. This appears to be an error and is not saved. Check Readings _PVreal, _GridFeedIn, _GridConsumption, _BatIn_XX, _BatOut_XX of hour >$shr<");
+      Log3 ($name, $vl, "$name $pre The calculated Energy consumption of the house is negative. This appears to be an error and is not saved. Check Readings _PVreal, _GridFeedIn, _GridConsumption, _BatIn_XX, _BatOut_XX of hour >$hod<");
   }
   
   if ($debug =~ /collectData/xs) {
@@ -12681,7 +12843,10 @@ sub _saveEnergyConsumption {
       Log3 ($name, 1, "$name DEBUG> EnergyConsumption result -> $con Wh");
   }
   
-  writeToHistory ( { paref => $paref, key => 'con', val => $con, hour => $shr } ) if($dowrite);
+  if ($dowrite) {
+      writeToHistory ( { paref => $paref, key => 'con', val => $con, hour => $hod } );
+      $data{$name}{circular}{99}{todayConsumption} = HistoryVal ($name, $day, '99', 'con', undef);
+  }
 
 return;
 }
@@ -12692,6 +12857,7 @@ return;
 sub _genSpecialReadings {
   my $paref = shift;
   my $name  = $paref->{name};
+  my $day   = $paref->{day};
   my $t     = $paref->{t};              # aktueller UNIX Timestamp
 
   my $hash = $defs{$name};
@@ -12719,26 +12885,22 @@ sub _genSpecialReadings {
       }
 
       if ($def eq 'apimaxreq') {
-          $def = isSolCastUsed   ($hash) ? (AttrVal ($name, 'ctrlSolCastAPImaxReq', $solcmaxreqdef)) :
-                 isOpenMeteoUsed ($hash) ? $ometmaxreq                                               :
+          $def = isSolCastUsed   ($hash) ? (AttrVal ($name, 'ctrlSolCastAPImaxReq', SOLCMAXREQDEF)) :
+                 isOpenMeteoUsed ($hash) ? OMETMAXREQ                                               :
                  'n.a.';
       }
 
       if ($hcsr{$kpi}{fnr} == 1) {
-          
           storeReading ($prpo.'_'.$kpi, &{$hcsr{$kpi}{fn}} ($hash, $rapi, '?All', $kpi, $def));
       }
-
-      if ($hcsr{$kpi}{fnr} == 2) {
+      elsif ($hcsr{$kpi}{fnr} == 2) {
           $par = $kpi if(!$par);
           storeReading ($prpo.'_'.$kpi, &{$hcsr{$kpi}{fn}} ($hash, $par, $def).$hcsr{$kpi}{unit});
       }
-
-      if ($hcsr{$kpi}{fnr} == 3) {
+      elsif ($hcsr{$kpi}{fnr} == 3) {
           storeReading ($prpo.'_'.$kpi, &{$hcsr{$kpi}{fn}} ($hash, $hcsr{$kpi}{par}, $kpi, $def).$hcsr{$kpi}{unit});
       }
-
-      if ($hcsr{$kpi}{fnr} == 4) {
+      elsif ($hcsr{$kpi}{fnr} == 4) {
           if ($kpi eq 'SunHours_Remain') {
               my $ss  = &{$hcsr{$kpi}{fn}} ($hash, 'sunsetTodayTs',  $def);
               my $shr = ($ss - $t) / 3600;
@@ -12753,12 +12915,6 @@ sub _genSpecialReadings {
               $smr    = $smr < 0 ? 0 : $smr;
 
               storeReading ($prpo.'_'.$kpi, sprintf "%.0f", $smr);
-          }
-
-          if ($kpi eq 'runTimeTrainAI') {
-              my $rtaitr = &{$hcsr{$kpi}{fn}} ($hash, $hcsr{$kpi}{par}, $kpi, $def);
-
-              storeReading ($prpo.'_'.$kpi, $rtaitr);
           }
           
           if ($kpi =~ /BatPower(In|Out)_Sum/xs) {
@@ -12796,7 +12952,7 @@ sub _genSpecialReadings {
           if ($kpi eq 'todayBatInSum') {                                                                       # Summe tägl. Ladeenergie (alle Batterien) 
               my $tdbisum = 0;
               
-              for my $bn (1..$maxbatteries) {
+              for my $bn (1..MAXBATTERIES) {
                   $bn = sprintf "%02d", $bn;              
               
                   my $idbitot = &{$hcsr{$kpi}{fn}} ($hash, $hcsr{$kpi}{par}, 'initdaybatintot'.$bn, $def);     # initialer Tagesstartwert Batterie In total
@@ -12811,7 +12967,7 @@ sub _genSpecialReadings {
           if ($kpi eq 'todayBatOutSum') {                                                                      # Summe tägl. Entadeenergie (alle Batterien) 
               my $tdbosum = 0;
               
-              for my $bn (1..$maxbatteries) {
+              for my $bn (1..MAXBATTERIES) {
                   $bn = sprintf "%02d", $bn;              
               
                   my $idbotot = &{$hcsr{$kpi}{fn}} ($hash, $hcsr{$kpi}{par}, 'initdaybatouttot'.$bn, $def);    # initialer Tagesstartwert Batterie Out total
@@ -12946,8 +13102,8 @@ return;
 }
 
 ###################################################################################
-#      Messagefile für Notification System lesen
-#  Filestruktur:
+#      Erstellen System-Messages für Notification System
+#  Struktur:
 #  0|SV|1
 #  0|DE|Mitteilung ....
 #  0|EN|Message...
@@ -12961,14 +13117,14 @@ sub _readSystemMessages {
   
   my $midx = 0; 
 
-  if (!ReadingsVal ($name, '.migrated', 0)) {
-      $midx++;
-      $data{$name}{preparedmessages}{$midx}{SV}  = 1;
-      $data{$name}{preparedmessages}{$midx}{DE}  = 'Die gespeicherten PV Daten können mit "get ... x_migrate" in ein neues Format umgesetzt werden welches den Median Ansatz bei der PV Prognose aktiviert und nutzt.';
-      $data{$name}{preparedmessages}{$midx}{DE} .= '<br>Mit einem späteren Update des Moduls erfolgt diese Umstellung automatisch.';
-      $data{$name}{preparedmessages}{$midx}{EN}  = 'The stored PV data can be converted with “get ... x_migrate” into a new format which activates and uses the median approach in the PV forecast.';
-      $data{$name}{preparedmessages}{$midx}{EN} .= '<br>With a later update of the module, this changeover will take place automatically.';
-  }
+  #if (!ReadingsVal ($name, '.migrated', 0)) {
+  #    $midx++;
+  #    $data{$name}{preparedmessages}{$midx}{SV}  = 1;
+  #    $data{$name}{preparedmessages}{$midx}{DE}  = 'Die gespeicherten PV Daten können mit "get ... x_migrate" in ein neues Format umgesetzt werden welches den Median Ansatz bei der PV Prognose aktiviert und nutzt.';
+  #    $data{$name}{preparedmessages}{$midx}{DE} .= '<br>Mit einem späteren Update des Moduls erfolgt diese Umstellung automatisch.';
+  #    $data{$name}{preparedmessages}{$midx}{EN}  = 'The stored PV data can be converted with “get ... x_migrate” into a new format which activates and uses the median approach in the PV forecast.';
+  #    $data{$name}{preparedmessages}{$midx}{EN} .= '<br>With a later update of the module, this changeover will take place automatically.';
+  #}
   
   $data{$name}{preparedmessages}{999500}{TS} = time;
 
@@ -13039,7 +13195,7 @@ sub entryGraphic {
   my $layersync  = $2 // 0;
   
   my $w          = $width * $maxhours;                                                     # gesammte Breite der Ausgabe , WetterIcon braucht ca. 34px
-  my $offset     = -1 * AttrNum ($name, 'graphicHistoryHour', $histhourdef);
+  my $offset     = -1 * AttrNum ($name, 'graphicHistoryHour', HISTHOURDEF);
   my $dlink      = qq{<a href="$::FW_ME$::FW_subdir?detail=$name">$alias</a>};
 
   if (!$gsel) {
@@ -13058,15 +13214,15 @@ sub entryGraphic {
       dstyle         => qq{style='padding-left: 10px; padding-right: 10px; padding-top: 3px; padding-bottom: 3px; white-space:nowrap;'},     # TD-Style
       offset         => $offset,
       hourstyle      => AttrVal    ($name, 'graphicHourStyle',                  ''),
-      colorb1        => AttrVal    ($name, 'graphicBeam1Color',          $b1coldef),
-      colorb2        => AttrVal    ($name, 'graphicBeam2Color',          $b2coldef),
-      fcolor1        => AttrVal    ($name, 'graphicBeam1FontColor',  $b1fontcoldef),
-      fcolor2        => AttrVal    ($name, 'graphicBeam2FontColor',  $b2fontcoldef),
+      colorb1        => AttrVal    ($name, 'graphicBeam1Color',           B1COLDEF),
+      colorb2        => AttrVal    ($name, 'graphicBeam2Color',           B2COLDEF),
+      fcolor1        => AttrVal    ($name, 'graphicBeam1FontColor',   B1FONTCOLDEF),
+      fcolor2        => AttrVal    ($name, 'graphicBeam2FontColor',   B2FONTCOLDEF),
       beam1cont      => AttrVal    ($name, 'graphicBeam1Content',         'pvReal'),
       beam2cont      => AttrVal    ($name, 'graphicBeam2Content',     'pvForecast'),
       beam3cont      => AttrVal    ($name, 'graphicBeam3Content',               ''),
       beam4cont      => AttrVal    ($name, 'graphicBeam4Content',               ''),
-      caicon         => AttrVal    ($name, 'consumerAdviceIcon',        $caicondef),                # Consumer AdviceIcon
+      caicon         => AttrVal    ($name, 'consumerAdviceIcon',         CAICONDEF),                # Consumer AdviceIcon
       clegend        => AttrVal    ($name, 'consumerLegend',            'icon_top'),                # Lage und Art Cunsumer Legende
       clink          => AttrVal    ($name, 'consumerLink'  ,                     1),                # Detail-Link zum Verbraucher
       lotype         => AttrVal    ($name, 'graphicLayoutType',           'double'),
@@ -13078,12 +13234,12 @@ sub entryGraphic {
       show_night     => $show_night,                                                                # alle Balken (Spalten) anzeigen ?
       show_diff      => AttrVal    ($name, 'graphicShowDiff',                 'no'),                # zusätzliche Anzeige $di{} in allen Typen
       weather        => AttrNum    ($name, 'graphicShowWeather',                 1),                # Wetter Icons anzeigen
-      colorw         => AttrVal    ($name, 'graphicWeatherColor',      $wthcolddef),                # Wetter Icon Farbe Tag
-      colorwn        => AttrVal    ($name, 'graphicWeatherColorNight', $wthcolndef),                # Wetter Icon Farbe Nacht
+      colorw         => AttrVal    ($name, 'graphicWeatherColor',       WTHCOLDDEF),                # Wetter Icon Farbe Tag
+      colorwn        => AttrVal    ($name, 'graphicWeatherColorNight',  WTHCOLNDEF),                # Wetter Icon Farbe Nacht
       wlalias        => AttrVal    ($name, 'alias',                          $name),
       sheader        => AttrNum    ($name, 'graphicHeaderShow',                  1),                # Anzeigen des Grafik Headers
       hdrDetail      => AttrVal    ($name, 'graphicHeaderDetail',            'all'),                # ermöglicht den Inhalt zu begrenzen, um bspw. passgenau in ftui einzubetten
-      flowgsize      => CurrentVal ($hash, 'size',                   $flowGSizedef),                # Größe Energieflußgrafik
+      flowgsize      => CurrentVal ($hash, 'size',                    FLOWGSIZEDEF),                # Größe Energieflußgrafik
       flowgani       => CurrentVal ($hash, 'animate',                            1),                # Animation Energieflußgrafik
       flowgxshift    => CurrentVal ($hash, 'shiftx',                             0),                # X-Verschiebung der Flußgrafikbox (muß negiert werden)
       flowgyshift    => CurrentVal ($hash, 'shifty',                             0),                # Y-Verschiebung der Flußgrafikbox (muß negiert werden)
@@ -13091,7 +13247,7 @@ sub entryGraphic {
       flowgconX      => CurrentVal ($hash, 'showconsumerdummy',                  1),                # Dummyverbraucher in der Energieflußgrafik anzeigen
       flowgconsPower => CurrentVal ($hash, 'showconsumerpower',                  1),                # Verbraucher Leistung in der Energieflußgrafik anzeigen
       flowgconsTime  => CurrentVal ($hash, 'showconsumerremaintime',             1),                # Verbraucher Restlaufeit in der Energieflußgrafik anzeigen
-      flowgconsDist  => CurrentVal ($hash, 'consumerdist',                $fgCDdef),                # Abstand Verbrauchericons zueinander
+      flowgconsDist  => CurrentVal ($hash, 'consumerdist',                 FGCDDEF),                # Abstand Verbrauchericons zueinander
       flowgh2cDist   => CurrentVal ($hash, 'h2consumerdist',                     0),                # Erweiterung des vertikalen Abstandes Haus -> Consumer
       genpvdva       => AttrVal    ($name, 'ctrlGenPVdeviation',           'daily'),                # Methode der Abweichungsberechnung
       lang           => getLang    ($hash),
@@ -13139,7 +13295,7 @@ sub entryGraphic {
   my $clegend = $paref->{clegend};
   $m          = $paref->{modulo} % 2;
 
-  if ($legendtxt && ($clegend eq 'top')) {
+  if ($legendtxt && $clegend eq 'top') {
       $ret .= "<tr class='$htr{$m}{cl}'>";
       $ret .= "<td colspan='".($maxhours+2)."' align='center' style='padding-left: 10px; padding-top: 5px; padding-bottom: 5px; word-break: normal'>";
       $ret .= $legendtxt;
@@ -13192,10 +13348,10 @@ sub entryGraphic {
           $paref->{chartlvl}  = 2;                                                                         # Balkengrafik Ebene 2
           $paref->{beam1cont} = $paref->{beam3cont};
           $paref->{beam2cont} = $paref->{beam4cont};
-          $paref->{colorb1}   = AttrVal ($name, 'graphicBeam3Color',              $b3coldef);
-          $paref->{colorb2}   = AttrVal ($name, 'graphicBeam4Color',              $b4coldef);
-          $paref->{fcolor1}   = AttrVal ($name, 'graphicBeam3FontColor',      $b3fontcoldef);
-          $paref->{fcolor2}   = AttrVal ($name, 'graphicBeam4FontColor',      $b4fontcoldef);
+          $paref->{colorb1}   = AttrVal ($name, 'graphicBeam3Color',               B3COLDEF);
+          $paref->{colorb2}   = AttrVal ($name, 'graphicBeam4Color',               B4COLDEF);
+          $paref->{fcolor1}   = AttrVal ($name, 'graphicBeam3FontColor',       B3FONTCOLDEF);
+          $paref->{fcolor2}   = AttrVal ($name, 'graphicBeam4FontColor',       B4FONTCOLDEF);
           $paref->{height}    = AttrVal ($name, 'graphicBeamHeightLevel2', $paref->{height});
           $paref->{weather}   = 0;
 
@@ -13567,7 +13723,7 @@ sub _graphicHeader {
           $api .= '&nbsp;&nbsp;(';
           $api .= StatusAPIVal ($hash, $rapi, '?All', 'todayDoneAPIrequests', 0);
           $api .= '/';
-          $api .= StatusAPIVal ($hash, $rapi, '?All', 'todayRemainingAPIrequests', $solcmaxreqdef);
+          $api .= StatusAPIVal ($hash, $rapi, '?All', 'todayRemainingAPIrequests', SOLCMAXREQDEF);
           $api .= ')';
           $api .= '</span>';
       }
@@ -13658,7 +13814,7 @@ sub _graphicHeader {
           $api .= '&nbsp;&nbsp;(';
           $api .= StatusAPIVal ($hash, $rapi, '?All', 'todayDoneAPIrequests', 0);
           $api .= '/';
-          $api .= StatusAPIVal ($hash, $rapi, '?All', 'todayRemainingAPIrequests', $ometmaxreq);
+          $api .= StatusAPIVal ($hash, $rapi, '?All', 'todayRemainingAPIrequests', OMETMAXREQ);
           $api .= ')';
           $api .= '</span>';
       }
@@ -14316,9 +14472,7 @@ sub _graphicConsumerLegend {
   my ($clegendstyle, $clegend) = split '_', $paref->{clegend};
   my $clink                    = $paref->{clink};
 
-  my $type                     = $paref->{type};
   my @consumers                = sort{$a<=>$b} keys %{$data{$name}{consumers}};              # definierte Verbraucher ermitteln
-
   $clegend                     = '' if($clegendstyle eq 'none' || !int @consumers);
   $paref->{clegend}            = $clegend;
 
@@ -14582,6 +14736,7 @@ sub _beamGraphicFirstHour {
   $hfcg->{0}{wcc}     = HistoryVal ($hash, $hfcg->{0}{day_str}, $hfcg->{0}{time_str}, 'wcc',       '-');
   $hfcg->{0}{sunalt}  = HistoryVal ($hash, $hfcg->{0}{day_str}, $hfcg->{0}{time_str}, 'sunalt',    '-');
   $hfcg->{0}{sunaz}   = HistoryVal ($hash, $hfcg->{0}{day_str}, $hfcg->{0}{time_str}, 'sunaz',     '-');
+  $hfcg->{0}{don}     = HistoryVal ($name, $hfcg->{0}{day_str}, $hfcg->{0}{time_str}, 'DoN',         0);
 
   $val1 = HistoryVal ($hash, $hfcg->{0}{day_str}, $hfcg->{0}{time_str}, 'pvfc',  0);
   $val2 = HistoryVal ($hash, $hfcg->{0}{day_str}, $hfcg->{0}{time_str}, 'pvrl',  0);
@@ -14594,7 +14749,7 @@ sub _beamGraphicFirstHour {
   
   ## Batterien Selektionshash erstellen
   #######################################
-  for my $bn (1..$maxbatteries) {                                                                                          
+  for my $bn (1..MAXBATTERIES) {                                                                                          
       $bn               = sprintf "%02d", $bn;
       $hbsocs->{0}{$bn} = HistoryVal ($hash, $hfcg->{0}{day_str}, $hfcg->{0}{time_str}, 'batsoc'.$bn, 0);
   }
@@ -14703,6 +14858,7 @@ sub _beamGraphicRemainingHours {
               $hfcg->{$i}{wcc}     = HistoryVal ($hash, $ds, $hfcg->{$i}{time_str}, 'wcc',       '-');
               $hfcg->{$i}{sunalt}  = HistoryVal ($hash, $ds, $hfcg->{$i}{time_str}, 'sunalt',    '-');
               $hfcg->{$i}{sunaz}   = HistoryVal ($hash, $ds, $hfcg->{$i}{time_str}, 'sunaz',     '-');
+              $hfcg->{$i}{don}     = HistoryVal ($name, $ds, $hfcg->{$i}{time_str}, 'DoN',         0);
               
               $val1 = HistoryVal ($hash, $ds, $hfcg->{$i}{time_str}, 'pvfc',  0);
               $val2 = HistoryVal ($hash, $ds, $hfcg->{$i}{time_str}, 'pvrl',  0);
@@ -14715,7 +14871,7 @@ sub _beamGraphicRemainingHours {
 
               ## Batterien Selektionshash erstellen
               #######################################  
-              for my $bn (1..$maxbatteries) {                                                                                     
+              for my $bn (1..MAXBATTERIES) {                                                                                     
                   $bn                = sprintf "%02d", $bn;
                   $hbsocs->{$i}{$bn} = HistoryVal ($hash, $ds, $hfcg->{$i}{time_str}, 'batsoc'.$bn, 0);
               }              
@@ -14736,14 +14892,15 @@ sub _beamGraphicRemainingHours {
           $hfcg->{$i}{wcc}     = NexthoursVal ($hash, 'NextHour'.$nh, 'wcc',       '-');
           $hfcg->{$i}{sunalt}  = NexthoursVal ($hash, 'NextHour'.$nh, 'sunalt',    '-');
           $hfcg->{$i}{sunaz}   = NexthoursVal ($hash, 'NextHour'.$nh, 'sunaz',     '-');
-          my $stt              = NexthoursVal ($hash, 'NextHour'.$nh, 'starttime', '');
+          $hfcg->{$i}{don}     = NexthoursVal ($hash, 'NextHour'.$nh, 'DoN',         0);
+          my $stt              = NexthoursVal ($hash, 'NextHour'.$nh, 'starttime',  '');
           
           $val1 = NexthoursVal ($hash, 'NextHour'.$nh, 'pvfc',        0);
           $val4 = NexthoursVal ($hash, 'NextHour'.$nh, 'confc',       0);
           
           ## Batterien Selektionshash anreichern
           ########################################
-          for my $bn (1..$maxbatteries) {                                                                                     
+          for my $bn (1..MAXBATTERIES) {                                                                                     
               $bn                = sprintf "%02d", $bn;
               $hbsocs->{$i}{$bn} = NexthoursVal ($hash, 'NextHour'.$nh, 'soc'.$bn, 0);
           }
@@ -15156,8 +15313,8 @@ sub __dontNightshowSkipSync {
   if ($paref->{skip}{$i} && !$paref->{noSkip}{$i}) {             
      $skip = 1 if($paref->{layersync});                                           # Anwendung bei Zeitsynchronisation zwischen Ebene 1 und den folgenden Balkengrafikebenen                     
   }
-  elsif (!$paref->{show_night}      &&  $paref->{hfcg}{$i}{weather} > 99  && 
-         !$paref->{hfcg}{$i}{beam1} && !$paref->{hfcg}{beam2}             && 
+  elsif (!$paref->{show_night}      && !$paref->{hfcg}{$i}{don} && 
+         !$paref->{hfcg}{$i}{beam1} && !$paref->{hfcg}{beam2}   && 
          !$paref->{noSkip}{$i}) {
       
       $paref->{skip}{$i} = 1 if($paref->{layersync});                             # Anwendung bei Zeitsynchronisation zwischen Ebene 1 und den folgenden Balkengrafikebenen
@@ -15209,9 +15366,7 @@ sub __weatherOnBeam {
       $ii++;                                                                                                 # wieviele Stunden Icons haben sind beechnet?
       last if($ii > $maxhours || $ii > $barcount);
                                                                                                              # ToDo : weather_icon sollte im Fehlerfall Title mit der ID besetzen um in FHEMWEB sofort die ID sehen zu können
-      my ($icon_name, $title) = $hfcg->{$i}{weather} > 100                            ?
-                                weather_icon ($name, $lang, $hfcg->{$i}{weather}-100) :
-                                weather_icon ($name, $lang, $hfcg->{$i}{weather});
+      my ($icon_name, $title) = weather_icon ($name, $lang, $hfcg->{$i}{weather});
 
       $wcc   += 0 if(isNumeric ($wcc));                                                                      # Javascript Fehler vermeiden: https://forum.fhem.de/index.php/topic,117864.msg1233661.html#msg1233661
       $title .= ': '.$wcc;
@@ -15226,7 +15381,7 @@ sub __weatherOnBeam {
           debugLog ($paref, "graphic", "unknown weather id: ".$hfcg->{$i}{weather}.", please inform the maintainer");
       }
 
-      $icon_name .= $hfcg->{$i}{weather} < 100 ? '@'.$colorw : '@'.$colorwn;
+      $icon_name .= $hfcg->{$i}{don} ? '@'.$colorw : '@'.$colorwn;
       my $val     = FW_makeImage ($icon_name) // q{};
 
       if ($val =~ /title="$icon_name"/xs) {                                                                  # passendes Icon beim User nicht vorhanden ! ( attr web iconPath falsch/prüfen/update ? )
@@ -15260,7 +15415,7 @@ sub __batteryOnBeam {
   my $hh;
 
   for my $idx (sort keys %{$data{$name}{nexthours}}) {
-      for my $bn (1..$maxbatteries) {                                            # alle Batterien
+      for my $bn (1..MAXBATTERIES) {                                            # alle Batterien
           $bn      = sprintf "%02d", $bn;
           my $rcdc = NexthoursVal ($name, $idx, 'rcdchargebat'.$bn, undef);
           my $stt  = NexthoursVal ($name, $idx, 'starttime',        undef);
@@ -15277,11 +15432,13 @@ sub __batteryOnBeam {
       next if(!isNumeric ($kdx));
       
       my $ds = $hfcg->{$kdx}{day_str};
-      my $ts = $hfcg->{$kdx}{time_str};      
+      my $ts = $hfcg->{$kdx}{time_str};           
       
       next if(!defined $ds || !defined $ts);
       
-      for my $bn (1..$maxbatteries) {
+      $ts = (split ":", $ts)[0];                                           # Forum: https://forum.fhem.de/index.php?msg=1332721
+      
+      for my $bn (1..MAXBATTERIES) {
           $bn = sprintf "%02d", $bn;
           $ds = sprintf "%02d", $ds;
           
@@ -15310,7 +15467,7 @@ sub __batteryOnBeam {
   my $chour = strftime "%H", localtime($t);                                                           # aktuelle Stunde in 24h format (00-23) 
   my $ret   = q{};
   
-  for my $bn (1..$maxbatteries) {                                                                     # für jede definierte Batterie
+  for my $bn (1..MAXBATTERIES) {                                                                     # für jede definierte Batterie
       $bn = sprintf "%02d", $bn;
       my ($err, $badev, $h) = isDeviceValid ( { name => $name, obj => 'setupBatteryDev'.$bn, method => 'attr' } );
       next if($err);
@@ -15338,7 +15495,8 @@ sub __batteryOnBeam {
           my $bpowerout = BatteryVal ($name, $bn, 'bpowerout',   0);
           
           my $day_str   = $hfcg->{$i}{day_str};
-          my $time_str  = $hfcg->{$i}{time_str};
+          my $time_str  = $hfcg->{$i}{time_str};             
+          $time_str     = (split ":", $time_str)[0];                                                 # Forum: https://forum.fhem.de/index.php?msg=1332721
           my $soc       = $hfcg->{$i}{'soc'.$bn};
           
           my ($bpower, $currsoc);
@@ -15409,7 +15567,7 @@ sub _flowGraphic {
   my $cc             = CurrentVal  ($hash, 'consumption',             0);
   
   my $cc_dummy   = $cc;
-  my $scale      = $fgscaledef;
+  my $scale      = FGSCALEDEF;
   my $pdist      = 130;                                                        # Abstand Producer zueinander
   my $hasbat     = 1;                                                          # initial Batterie vorhanden
   my $stna       = $name;
@@ -15427,7 +15585,7 @@ sub _flowGraphic {
   my $socwhsum = 0;
   my $soc      = 0;
   
-  for my $bn (1..$maxbatteries) {                                                   # für jede definierte Batterie
+  for my $bn (1..MAXBATTERIES) {                                                   # für jede definierte Batterie
       $bn                   = sprintf "%02d", $bn;
       my ($err, $badev, $h) = isDeviceValid ( { name => $name, obj => 'setupBatteryDev'.$bn, method => 'attr' } );
       next if($err);
@@ -15471,7 +15629,7 @@ sub _flowGraphic {
   my $pv2bat  = 0;
   my $lfn     = 0;
 
-  for my $pn (1..$maxproducer) {
+  for my $pn (1..MAXPRODUCER) {
       $pn      = sprintf "%02d", $pn;
       my $p    = ProducerVal ($hash, $pn, 'pgeneration',    undef);
       my $feed = ProducerVal ($hash, $pn, 'pfeed',      'default');
@@ -15488,7 +15646,7 @@ sub _flowGraphic {
       }
   }
       
-  for my $in (1..$maxinverter) {
+  for my $in (1..MAXINVERTER) {
       $in      = sprintf "%02d", $in;
       my $p    = InverterVal ($hash, $in, 'igeneration',    undef);
       my $feed = InverterVal ($hash, $in, 'ifeed',      'default');
@@ -15597,10 +15755,10 @@ sub _flowGraphic {
                    !$node2grid && !$cgc && $bat2home ? "$stna grid_gray"  :
                    "$stna grid_red";
   
-  my $strokecolstd = CurrentVal ($hash, 'strokecolstd', $strokcolstddef);
-  my $strokecolsig = CurrentVal ($hash, 'strokecolsig', $strokcolsigdef);
-  my $strokecolina = CurrentVal ($hash, 'strokecolina', $strokcolinadef);
-  my $strokewidth  = CurrentVal ($hash, 'strokewidth',  $strokwidthdef);  
+  my $strokecolstd = CurrentVal ($hash, 'strokecolstd', STROKCOLSTDDEF);
+  my $strokecolsig = CurrentVal ($hash, 'strokecolsig', STROKCOLSIGDEF);
+  my $strokecolina = CurrentVal ($hash, 'strokecolina', STROKCOLINADEF);
+  my $strokewidth  = CurrentVal ($hash, 'strokewidth',   STROKWIDTHDEF);  
   
   my $ret = << "END0";
       <style>
@@ -15714,7 +15872,7 @@ END1
   
   ## Home Icon
   ##############
-  my $hicon        = FW_makeImage    ($homeicondef, '');
+  my $hicon        = FW_makeImage    (HOMEICONDEF, '');
   ($scale, $hicon) = __normIconScale ($name, $hicon);
   
   $ret .= qq{<g id="home_$stna" transform="translate(368,360),scale($scale)">};                   # translate(X-Koordinate,Y-Koordinate), scale(<Größe>)-> Koordinaten ändern sich bei Größenänderung           
@@ -15726,7 +15884,7 @@ END1
   if ($flowgconX) {   
       my $dumtxt       = $htitles{dumtxt}{$lang};  
       my $dumcol       = $cc_dummy <= 0 ? '@grey' : q{};                                          # Einfärbung Consumer Dummy
-      my $dicon        = FW_makeImage    ($cicondef.$dumcol, '');
+      my $dicon        = FW_makeImage    (CICONDEF.$dumcol, '');
       ($scale, $dicon) = __normIconScale ($name, $dicon);
       
       $ret .= qq{<g id="dummy_$stna" transform="translate(660,360),scale($scale)">};
@@ -15840,7 +15998,7 @@ END3
 
           my $p              = $currentPower;
           $p                 = (($currentPower / $power) * 100) if ($power > 0);
-          $consumer_style    = $p > $defpopercent ? "$stna active_normal" : "$stna inactive";
+          $consumer_style    = $p > DEFPOPERCENT ? "$stna active_normal" : "$stna inactive";
           my $chain_color    = "";                                                                 # Farbe der Laufkette des Consumers
 
           if ($p > 0.5) {
@@ -16111,10 +16269,10 @@ sub __substituteIcon {
   my $txt = '';
 
   if ($ptyp eq 'consumer') {                                                             # Icon Consumer 
-      ($icon, $color) = split '@', ConsumerVal ($hash, $pn, 'icon', $cicondef);
+      ($icon, $color) = split '@', ConsumerVal ($hash, $pn, 'icon', CICONDEF);
       
       if (!$color) {
-          $color = isConsumerLogOn ($hash, $pn, $pcurr) ? $ciconcoldef : '';
+          $color = isConsumerLogOn ($hash, $pn, $pcurr) ? CICONCOLDEF : '';
       }
   }
   elsif ($ptyp eq 'battery') {                                                           # Icon Batterie 
@@ -16144,9 +16302,9 @@ sub __substituteIcon {
               ($icon, $color) = split '@', $ircmd;
               $icon           = $icon    ? $icon    : 
                                 $socicon ? $socicon :
-                                $bicondef;                                               # nur Farbe angegeben  
+                                BICONDEF;                                                # nur Farbe angegeben  
                                 
-              $color  //= $biccolrcddef;
+              $color  //= BICCOLRCDDEF;
               
               if ($flag eq 'hist') {                                                     # erreichter SoC vergangener Stunden
                   $pretxt = $htitles{onlybatw}{$lang}." $pn: $msg1";
@@ -16159,9 +16317,9 @@ sub __substituteIcon {
               ($icon, $color) = split '@', $inorcmd;
               $icon           = $icon    ? $icon    : 
                                 $socicon ? $socicon :
-                                $bicondef;                                               # nur Farbe angegeben  
+                                BICONDEF;                                                # nur Farbe angegeben  
                                 
-              $color  //= $biccolnrcddef;
+              $color  //= BICCOLNRCDDEF;
               $pretxt   = $htitles{onlybatw}{$lang}." $pn: $msg1\n".$htitles{bncharel}{$lang};
           }
       }
@@ -16171,27 +16329,27 @@ sub __substituteIcon {
                ($icon, $color) = split '@', $icharge;
                $icon           = $icon    ? $icon    : 
                                  $socicon ? $socicon :
-                                 $bicondef;                                              # nur Farbe angegeben
+                                 BICONDEF;                                               # nur Farbe angegeben
                                  
-               $color //= $bchgiconcoldef;
+               $color //= BCHGICONCOLDEF;
                $txt     = "$pretxt\nStatus: ".$htitles{ischawth}{$lang}.' '.$pcurr.' W'.$soctxt;
            }
            elsif ($pcurr < 0) {                                                          # Batterie wird entladen
                ($icon, $color) = split '@', $idischrg;
                $icon           = $icon    ? $icon    : 
                                  $socicon ? $socicon :
-                                 $bicondef;                                              # nur Farbe angegeben
+                                 BICONDEF;                                               # nur Farbe angegeben
                                  
-               $color //= $bdchiconcoldef;  
+               $color //= BDCHICONCOLDEF;  
                $txt     = "$pretxt\nStatus: ".$htitles{isdchawt}{$lang}.' '.(abs $pcurr).' W'.$soctxt;               
            }
            else {                                                                        # Standby
                ($icon, $color) = split '@', $ircmd;
                $icon           = $icon    ? $icon    : 
                                  $socicon ? $socicon :
-                                 $bicondef;                                              # nur Farbe angegeben  
+                                 BICONDEF;                                               # nur Farbe angegeben  
                                 
-               $color //= $biccolrcddef;
+               $color //= BICCOLRCDDEF;
                $txt     = "$pretxt\nStatus: Standby".$soctxt;
            }
       }
@@ -16204,7 +16362,7 @@ sub __substituteIcon {
       }
   }
   elsif ($ptyp eq 'producer') {                                                          # Icon Producer
-      ($icon, $color) = split '@', ProducerVal ($hash, $pn, 'picon', $prodicondef); 
+      ($icon, $color) = split '@', ProducerVal ($hash, $pn, 'picon', PRODICONDEF); 
       $txt            = ProducerVal ($hash, $pn, 'palias', ''); 
       
       if (!$pcurr) {
@@ -16212,35 +16370,35 @@ sub __substituteIcon {
       }      
   }
   elsif ($ptyp eq 'inverter') {                                                          # Inverter, Smartloader
-      my ($iday, $inight) = split ':', InverterVal ($hash, $pn, 'iicon', $invicondef);
+      my ($iday, $inight) = split ':', InverterVal ($hash, $pn, 'iicon', INVICONDEF);
       
       if ($don || $pcurr) {                                                              # Tag -> eigenes Icon oder Standard
           $txt            = InverterVal ($hash, $pn, 'ialias', '');
-          $iday           = $iday ? $iday : $invicondef;
+          $iday           = $iday ? $iday : INVICONDEF;
           ($icon, $color) = split '@', $iday;
-          $color          = !$pcurr ? $inactcoldef :
-                            $color  ? $color       : 
-                            $actcoldef;
+          $color          = !$pcurr ? INACTCOLDEF :
+                            $color  ? $color      : 
+                            ACTCOLDEF;
       }
       else {                                                                           # Nacht -> eigenes Icon oder Mondphase
-          my $mpi = CurrentVal ($hash, 'moonPhaseI', $moonicondef);
+          my $mpi = CurrentVal ($hash, 'moonPhaseI', MOONICONDEF);
           
           if ($inight) {                                                               # eigenes Icon + ggf. Farbe
               ($icon, $color) = split '@', $inight;
-              $color          = $color ? $color : $inactcoldef;
+              $color          = $color ? $color : INACTCOLDEF;
           }
           else {
-              $icon           = $hmoon{$mpi}{icon}.'@'.$mooncoldef;
+              $icon           = $hmoon{$mpi}{icon}.'@'.MOONCOLDEF;
               $txt            = $hmoon{$mpi}{$lang};
               ($icon, $color) = split '@', $icon;
           }
       }
   }
   elsif ($ptyp eq 'node') {                                                            # Knoten-Icon
-      ($icon, $color) = split '@', $nodeicondef;
-      $color          = !$pcurr ? $inactcoldef :
-                        $color  ? $color       : 
-                        $actcoldef;
+      ($icon, $color) = split '@', NODEICONDEF;
+      $color          = !$pcurr ? INACTCOLDEF :
+                        $color  ? $color      : 
+                        ACTCOLDEF;
   }
 
   $icon .= '@'.$color if($color);
@@ -16268,15 +16426,15 @@ return $p;
 #    berechne Icon width, height auf Sollnormativ
 #    width:   470pt
 #    height:  470pt
-#    scale:   0.10   Normativ $fgscaledef
+#    scale:   0.10   Normativ FGSCALEDEF
 ################################################################
 sub __normIconScale {
   my $name = shift;
   my $icon = shift;
   my $dim  = shift // 470;                                                     # Dimension
   
-  my $hscale           = $fgscaledef;                                          # Scale Normativ
-  my $wscale           = $fgscaledef;
+  my $hscale           = FGSCALEDEF;                                          # Scale Normativ
+  my $wscale           = FGSCALEDEF;
   my ($width,  $wunit) = $icon =~ /width="(\d+\.\d+|\d+)(.*?)"/xs;
   my ($height, $hunit) = $icon =~ /height="(\d+\.\d+|\d+)(.*?)"/xs;
   
@@ -16307,7 +16465,7 @@ sub __normIconScale {
   $icon =~ s/width="(.*?)"/width="$widthnormpt"/;
   $icon =~ s/height="(.*?)"/height="$heightnormpt"/;
   
-return ($fgscaledef, $icon);
+return (FGSCALEDEF, $icon);
 }
 
 ################################################################
@@ -16463,40 +16621,37 @@ sub _addHourAiRawdata {
 
   my $hash = $defs{$name};
   my $rho  = sprintf "%02d", $h;
-  my $sr   = ReadingsVal ($name, ".signaldone_".$rho, "");
-
-  return if($sr eq "done");
 
   if (!$aln) {
-      storeReading ('.signaldone_'.sprintf("%02d",$h), 'done');
-      debugLog     ($paref, 'pvCorrectionRead', "Autolearning is switched off for hour: $h -> skip add AI raw data");
+      debugLog ($paref, 'pvCorrectionRead', "Autolearning is switched off for hour: $h -> skip add AI raw data");
       return;
   }
 
   debugLog ($paref, 'aiProcess', "start add AI raw data for hour: $h");
 
-  $paref->{ood} = 1;                                              # Only One Day
+  $paref->{ood} = 1;                                                                                  # only one Day
   $paref->{rho} = $rho;
 
-  aiAddRawData ($paref);                                          # Raw Daten für AI hinzufügen und sichern
+  aiAddRawData ($paref);                                                                              # Raw Daten für AI hinzufügen und sichern
 
   delete $paref->{ood};
   delete $paref->{rho};
 
-  storeReading ('.signaldone_'.sprintf("%02d",$h), 'done');
-
 return;
 }
 
-###############################################################
-#     Abruf und Einlesen Messagefile nonBlocking
-###############################################################
+####################################################################################################
+#                       Abruf und Einlesen Messagefile nonBlocking
+#  $data{$name}{filemessages}{999000}{TSNEXT}: Timestamp nächster Pull Message File
+####################################################################################################
 sub getMessageFileNonBlocking {
   my $hash = shift;
   my $name = $hash->{NAME};
+  
+  my $tsnext = gettimeofday() + GMFILEREPEAT + int(rand(GMFILERANDOM));
       
-  RemoveInternalTimer ($hash, "FHEM::SolarForecast::getMessageFileNonBlocking");
-  InternalTimer       (gettimeofday() + $gmfilerepeat, "FHEM::SolarForecast::getMessageFileNonBlocking", $hash, 0);
+  RemoveInternalTimer ($hash,   "FHEM::SolarForecast::getMessageFileNonBlocking");
+  InternalTimer       ($tsnext, "FHEM::SolarForecast::getMessageFileNonBlocking", $hash, 0);
   
   my (undef, $disabled, $inactive) = controller ($name);
   return if($disabled || $inactive);
@@ -16507,18 +16662,16 @@ sub getMessageFileNonBlocking {
       Log3 ($name, 3, qq{$name - another Message File Process with PID "$hash->{HELPER}{GMFRUNNING}{pid}" is already running ... get Message File is aborted});
       return;
   }
-  
-  Log3 ($name, 4, "$name - Notification System - Message file >$messagefile< is retrieved non blocking");
 
-  my $paref = { name  => $name,
-                hash  => $hash,
-                block => 1
+  my $paref = { name   => $name,
+                tsnext => $tsnext,
+                block  => 1
               };
 
   $hash->{HELPER}{GMFRUNNING} = BlockingCall ( "FHEM::SolarForecast::_retrieveMessageFile",
                                                $paref,
                                                "FHEM::SolarForecast::_processMessageFile",
-                                               $gmfblto,
+                                               GMFBLTO,
                                                "FHEM::SolarForecast::_abortGetMessageFile",
                                                $hash
                                              );
@@ -16532,15 +16685,18 @@ return;
 }
 
 ###############################################################
-#         Message File aus contrib abholen
+#         Message File aus Quelle abholen
 ###############################################################
 sub _retrieveMessageFile {
   my $paref = shift;
   my $name  = $paref->{name};
   my $block = $paref->{block} // 0;
   
+  Log3 ($name, 4, "$name - Notification System - Message File >$messagefile< is retrieved non blocking");
+  Log3 ($name, 4, "$name - Notification System - Message File Source: GitHub Repository");
+  
   my $valid           = 1;
-  my ($err, $remfile) = __httpBlockingGet ($name, $bPath.$messagefile.$pPath);
+  my ($err, $remfile) = __httpBlockingGet ($name, BGHPATH.$messagefile.PGHPATH);
   
   $remfile = q{} if($remfile =~ /No\snode\strunk\/fhem\/contrib\/SolarForecast\//xs);
   
@@ -16555,7 +16711,7 @@ sub _retrieveMessageFile {
   }
   
   if ($valid) {
-      $err = __updWriteFile ("$root/FHEM/", $messagefile, $remfile);
+      $err = __updWriteFile ("$root/FHEM", $messagefile, $remfile);
 
       if ($err) {
           $valid = 0;
@@ -16575,12 +16731,12 @@ return;
 }
 
 ###############################################################
-#     Folgeroutine nach Message File aus contrib abholen
+#     Folgeroutine nach Message File aus Quelle abholen
 ###############################################################
 sub _processMessageFile {
   my $serial = decode_base64 (shift);
 
-  my $paref = eval { thaw ($serial) };                                             # Deserialisierung
+  my $paref = eval { thaw ($serial) };                                                  # Deserialisierung
   my $name  = $paref->{name};
   my $valid = $paref->{valid};
   my $hash  = $defs{$name};
@@ -16592,19 +16748,21 @@ sub _processMessageFile {
 return;
 }
 
-######################################################################
+####################################################################################################
 #      Messagefile für Notification System lesen
 #  Filestruktur:
 #  0|SV|1
 #  0|DE|Mitteilung ....
 #  0|EN|Message...
-#  $data{$name}{messages}{999000}{TS}: Timestamp Stand Message File
-######################################################################
+#  $data{$name}{messages}{999000}{TS}:         Timestamp Stand Message File
+#  $data{$name}{filemessages}{999000}{TSNEXT}: Timestamp nächster Pull Message File
+####################################################################################################
 sub __readFileMessages {                  
-  my $paref = shift;
-  my $name  = $paref->{name};
+  my $paref  = shift;
+  my $name   = $paref->{name};
+  my $tsnext = $paref->{tsnext};
   
-  my $hash  = $defs{$name};
+  my $hash   = $defs{$name};
 
   open (FD, "$root/FHEM/$messagefile") or do { return $! };
   
@@ -16624,7 +16782,8 @@ sub __readFileMessages {
       $data{$name}{filemessages}{$l[0]}{$l[1]} = $l[2];
   }
   
-  $data{$name}{filemessages}{999000}{TS} = time;
+  $data{$name}{filemessages}{999000}{TS}     = time;
+  $data{$name}{filemessages}{999000}{TSNEXT} = $tsnext;
 
 return;
 }
@@ -16645,7 +16804,7 @@ sub _abortGetMessageFile {
 return;
 }
 
-##########################################################################
+####################################################################################################
 #             Mitteilungssystem füllen
 #  Schweregrad SV:
 #  0 - keine Mitteilung
@@ -16654,10 +16813,11 @@ return;
 #  3 - Fehler / Problem
 #
 #  Statusspeicher:
-#  $data{$name}{messages}{999999}{RD}: 1 - gelesen, 0 - ungelesen
-#  $data{$name}{messages}{999000}{TS}: Timestamp Stand Message File
-#  $data{$name}{messages}{999500}{TS}: Timestamp Stand prepared Messages
-##########################################################################
+#  $data{$name}{messages}{999999}{RD}:         1 - gelesen, 0 - ungelesen
+#  $data{$name}{messages}{999000}{TS}:         Timestamp Stand Message File
+#  $data{$name}{filemessages}{999000}{TSNEXT}: Timestamp nächster Pull Message File
+#  $data{$name}{messages}{999500}{TS}:         Timestamp Stand prepared Messages
+####################################################################################################
 sub fillupMessageSystem {           
   my $paref = shift;
   my $hash  = $paref->{hash};
@@ -16672,7 +16832,7 @@ sub fillupMessageSystem {
   ## Aufnahme Stand für alt/neu Vergleich + Clear Messages
   ##########################################################
   for my $idx (sort keys %{$data{$name}{messages}}) {    
-      next if($idx >= $idxlimit);
+      next if($idx >= IDXLIMIT);
       $otxt .= $data{$name}{messages}{$idx}{SV} if(defined $data{$name}{messages}{$idx}{SV});
       $otxt .= $data{$name}{messages}{$idx}{DE} if(defined $data{$name}{messages}{$idx}{DE});
       $otxt .= $data{$name}{messages}{$idx}{EN} if(defined $data{$name}{messages}{$idx}{EN});
@@ -16684,7 +16844,7 @@ sub fillupMessageSystem {
   ######################################################################## 
   # Integration File Messages
   for my $mfi (sort keys %{$data{$name}{filemessages}}) {
-      next if($mfi >= $idxlimit);
+      next if($mfi >= IDXLIMIT);
       $midx++;
       $data{$name}{messages}{$midx}{SV} = $data{$name}{filemessages}{$mfi}{SV};
       $data{$name}{messages}{$midx}{DE} = $data{$name}{filemessages}{$mfi}{DE};
@@ -16693,15 +16853,16 @@ sub fillupMessageSystem {
   
   # Integration prepared Messages
   for my $smi (sort keys %{$data{$name}{preparedmessages}}) {
-      next if($smi >= $idxlimit);
+      next if($smi >= IDXLIMIT);
       $midx++;
       $data{$name}{messages}{$midx}{SV} = $data{$name}{preparedmessages}{$smi}{SV};
       $data{$name}{messages}{$midx}{DE} = encode ("utf8", $data{$name}{preparedmessages}{$smi}{DE});
       $data{$name}{messages}{$midx}{EN} = encode ("utf8", $data{$name}{preparedmessages}{$smi}{EN});  
   }
   
-  $data{$name}{messages}{999000}{TS} = $data{$name}{filemessages}{999000}{TS}     // 0;
-  $data{$name}{messages}{999500}{TS} = $data{$name}{preparedmessages}{999500}{TS} // 0;
+  $data{$name}{messages}{999000}{TS}     = $data{$name}{filemessages}{999000}{TS}     // 0;
+  $data{$name}{messages}{999000}{TSNEXT} = $data{$name}{filemessages}{999000}{TSNEXT} // 0;   
+  $data{$name}{messages}{999500}{TS}     = $data{$name}{preparedmessages}{999500}{TS} // 0;
   
   ########################################################################
   ## Ende Messages auffüllen
@@ -16710,7 +16871,7 @@ sub fillupMessageSystem {
   ## Vergleich auf geänderte Messages
   #####################################
   for my $idx (sort keys %{$data{$name}{messages}}) {                                     
-      next if($idx >= $idxlimit);
+      next if($idx >= IDXLIMIT);
       $ntxt .= $data{$name}{messages}{$idx}{SV} if(defined $data{$name}{messages}{$idx}{SV});
       $ntxt .= $data{$name}{messages}{$idx}{DE} if(defined $data{$name}{messages}{$idx}{DE});
       $ntxt .= $data{$name}{messages}{$idx}{EN} if(defined $data{$name}{messages}{$idx}{EN});
@@ -16741,9 +16902,14 @@ sub outputMessages {
   my $lang  = $paref->{lang};
   
   my ($micon, $midx) = fillupMessageSystem ($paref);                                                 # Ergebnisse füllen (sind leer wenn Browser nicht refreshed)
-  my $tnf            = $data{$name}{messages}{999000}{TS}                                     ? 
+  my $tfl            = $data{$name}{messages}{999000}{TS}                                     ? 
                        (timestampToTimestring ($data{$name}{messages}{999000}{TS}, $lang))[0] :
                        'n.a.';
+                       
+  my $tfn            = $data{$name}{messages}{999000}{TSNEXT}                                     ?
+                       (timestampToTimestring ($data{$name}{messages}{999000}{TSNEXT}, $lang))[0] :
+                       'n.a.';
+                       
   my $tpm            = $data{$name}{messages}{999500}{TS}  ?
                        (timestampToTimestring ($data{$name}{messages}{999500}{TS}, $lang))[0] :
                        'n.a.';
@@ -16751,7 +16917,7 @@ sub outputMessages {
   ############
   my $out  = qq{<html>};
   $out    .= qq{<b>$hqtxt{msgsys}{$lang}</b> <br><br>};  
-  $out    .= qq{$hqtxt{ludich}{$lang} - <b>File:</b> $tnf, <b>System:</b> $tpm  <br>};       
+  $out    .= qq{$hqtxt{impcha}{$lang} - <b>File:</b> $tfl ($hqtxt{scedld}{$lang}: $tfn), <b>System:</b> $tpm  <br>};       
   $out    .= qq{($hqtxt{dmgsig}{$lang})  <br><br>};
 
   $out    .= qq{<table class="roomoverview" style="text-align:left; border:1px solid; padding:5px; border-spacing:5px; margin-left:auto; margin-right:auto;">};
@@ -16767,7 +16933,7 @@ sub outputMessages {
   my $hc = 0;
 
   for my $key (sort keys %{$data{$name}{messages}}) {
-      next if($key >= $idxlimit);
+      next if($key >= IDXLIMIT);
       
       $hc++;
       #my $enmsg = encode ("utf8", $data{$name}{messages}{$key}{$lang});
@@ -16805,7 +16971,7 @@ sub manageTrain {
   my $name  = $paref->{name};
   my $hash  = $defs{$name};
 
-  if (CircularVal ($hash, 99, 'runTimeTrainAI', 0) < $aibcthhld) {
+  if (CircularVal ($hash, 99, 'runTimeTrainAI', 0) < AIBCTHHLD) {
       BlockingKill ($hash->{HELPER}{AIBLOCKRUNNING}) if(defined $hash->{HELPER}{AIBLOCKRUNNING});
       debugLog     ($paref, 'aiProcess', qq{AI Training is started in main process});
       aiTrain      ($paref);
@@ -16823,7 +16989,7 @@ sub manageTrain {
      $hash->{HELPER}{AIBLOCKRUNNING} = BlockingCall ( "FHEM::SolarForecast::aiTrain",
                                                       $paref,
                                                       "FHEM::SolarForecast::finishTrain",
-                                                      $aitrblto,
+                                                      AITRBLTO,
                                                       "FHEM::SolarForecast::abortTrain",
                                                       $hash
                                                     );
@@ -16832,7 +16998,7 @@ sub manageTrain {
      if (defined $hash->{HELPER}{AIBLOCKRUNNING}) {
          $hash->{HELPER}{AIBLOCKRUNNING}{loglevel} = 3;                                                       # Forum https://forum.fhem.de/index.php/topic,77057.msg689918.html#msg689918
 
-         debugLog ($paref, 'aiProcess', qq{AI Training BlockingCall PID "$hash->{HELPER}{AIBLOCKRUNNING}{pid}" with Timeout "$aitrblto" started});
+         debugLog ($paref, 'aiProcess', qq{AI Training BlockingCall PID "$hash->{HELPER}{AIBLOCKRUNNING}{pid}" with Timeout "AITRBLTO" started});
      }
   }
 
@@ -16912,11 +17078,11 @@ return;
 ################################################################
 #     KI Instanz(en) aus Raw Daten Hash erzeugen
 ################################################################
-sub aiAddInstance {                   ## no critic "not used"
+sub aiAddInstancePV {                   ## no critic "not used"
   my $paref = shift;
   my $name  = $paref->{name};
   my $type  = $paref->{type};
-  my $taa   = $paref->{taa};          # do train after add
+  my $taa   = $paref->{taa};            # do train after add
 
   my $hash  = $defs{$name};
 
@@ -16940,10 +17106,10 @@ sub aiAddInstance {                   ## no critic "not used"
       my $rad1h = AiRawdataVal ($hash, $idx, 'rad1h', 0);
       next if($rad1h <= 0);
 
-      my $temp   = AiRawdataVal ($hash, $idx, 'temp',  20);
-      my $wcc    = AiRawdataVal ($hash, $idx, 'wcc',    0);
-      my $rr1c   = AiRawdataVal ($hash, $idx, 'rr1c',   0);
-      my $sunalt = AiRawdataVal ($hash, $idx, 'sunalt', 0);
+      my $temp   = AiRawdataVal ($hash, $idx, 'temp', undef);
+      my $wcc    = AiRawdataVal ($hash, $idx, 'wcc',  undef);
+      my $rr1c   = AiRawdataVal ($hash, $idx, 'rr1c', undef);
+      my $sunalt = AiRawdataVal ($hash, $idx, 'sunalt',   0);
 
       eval { $dtree->add_instance (attributes => { rad1h  => $rad1h,
                                                    temp   => $temp,
@@ -16956,14 +17122,14 @@ sub aiAddInstance {                   ## no critic "not used"
                                   );
              1;
            }
-           or do { Log3 ($name, 1, "$name - aiAddInstance ERROR: $@");
+           or do { Log3 ($name, 1, "$name - aiAddInstancePV ERROR: $@");
                    $data{$name}{current}{aiaddistate} = $@;
                    return;
                  };
 
       $data{$name}{current}{aiAddedToTrain}++;
 
-      debugLog ($paref, 'aiProcess', qq{AI Instance added $idx - hod: $hod, sunalt: $sunalt, rad1h: $rad1h, pvrl: $pvrl, wcc: $wcc, rr1c: $rr1c, temp: $temp}, 4);
+      debugLog ($paref, 'aiProcess', "AI Instance added $idx - hod: $hod, sunalt: $sunalt, rad1h: $rad1h, pvrl: $pvrl, wcc: ".(defined $wcc ? $wcc : '-').", rr1c: ".(defined $rr1c ? $rr1c : '-').", temp: ".(defined $temp ? $temp : '-'), 4);
   }
 
   debugLog ($paref, 'aiProcess', "AI Instance add - ".$data{$name}{current}{aiAddedToTrain}." entities added for training ".(AttrVal ($name, 'verbose', 3) != 4 ? '(set verbose 4 for output more detail)' : ''));
@@ -17253,25 +17419,30 @@ return;
 #    Daten der Raw Datensammlung hinzufügen
 ################################################################
 sub aiAddRawData {
-  my $paref = shift;
-  my $name  = $paref->{name};
-  my $type  = $paref->{type};
-  my $day   = $paref->{day} // strftime "%d",  localtime(time);           # aktueller Tag (range 01 to 31)
-  my $ood   = $paref->{ood} // 0;                                         # only one (current) day
-  my $rho   = $paref->{rho};                                              # only this hour of day
-
-  my $hash  = $defs{$name};
+  my $paref    = shift;
+  my $name     = $paref->{name};
+  my $yday     = $paref->{yday};                                             # vorheriger Tag (falls gesetzt)
+  my $day      = $paref->{day} // strftime "%d",  localtime(time);           # aktueller Tag (range 01 to 31)
+  my $ood      = $paref->{ood} // 0;                                         # only one (current) day
+  my $rho      = $paref->{rho};                                              # only this hour of day
+  my $dayname  = $paref->{dayname}; 
+  my $ydayname = $paref->{ydayname};
+  
+  my $hash = $defs{$name};
 
   delete $data{$name}{current}{aitrawstate};
 
   my $err;
   my $dosave = 0;
+  
+  $day     = $yday     if(defined $yday);                                    # der vergangene Tag soll verarbeitet werden
+  $dayname = $ydayname if(defined $ydayname);                                # Name des Vortages
 
   for my $pvd (sort keys %{$data{$name}{pvhist}}) {
       next if(!$pvd);
 
       if ($ood) {
-          next if($pvd ne $paref->{day});
+          next if($pvd ne $day);
       }
 
       last if(int $pvd > int $day);
@@ -17279,43 +17450,43 @@ sub aiAddRawData {
       for my $hod (sort keys %{$data{$name}{pvhist}{$pvd}}) {
           next if(!$hod || $hod eq '99' || ($rho && $hod ne $rho));
 
+          my $ridx   = _aiMakeIdxRaw ($pvd, $hod, $paref->{yt});
+          
+          my $temp   = HistoryVal ($hash, $pvd, $hod, 'temp',  undef);
+          my $sunalt = HistoryVal ($hash, $pvd, $hod, 'sunalt',    0);
+          my $sunaz  = HistoryVal ($hash, $pvd, $hod, 'sunaz',     0); 
+          my $con    = HistoryVal ($hash, $pvd, $hod, 'con',   undef);    
+          my $wcc    = HistoryVal ($hash, $pvd, $hod, 'wcc',   undef);
+          my $rr1c   = HistoryVal ($hash, $pvd, $hod, 'rr1c',  undef);  
+          my $rad1h  = HistoryVal ($hash, $pvd, $hod, 'rad1h', undef);          
+          
+          my $tbin   = temp2bin   ($temp)    if(defined $temp);
+          my $cbin   = cloud2bin  ($wcc)     if(defined $wcc);
+          my $sabin  = sunalt2bin ($sunalt);
+          
+          $data{$name}{aidectree}{airaw}{$ridx}{sunalt}  = $sabin;
+          $data{$name}{aidectree}{airaw}{$ridx}{sunaz}   = $sunaz;
+          $data{$name}{aidectree}{airaw}{$ridx}{dayname} = $dayname;
+          $data{$name}{aidectree}{airaw}{$ridx}{hod}     = $hod;
+          $data{$name}{aidectree}{airaw}{$ridx}{temp}    = $tbin  if(defined $tbin);
+          $data{$name}{aidectree}{airaw}{$ridx}{con}     = $con   if(defined $con && $con >= 0);
+          $data{$name}{aidectree}{airaw}{$ridx}{wcc}     = $cbin  if(defined $cbin);
+          $data{$name}{aidectree}{airaw}{$ridx}{rr1c}    = $rr1c  if(defined $rr1c);
+          $data{$name}{aidectree}{airaw}{$ridx}{rad1h}   = $rad1h if(defined $rad1h && $rad1h > 0);
+          
+          $dosave++;
+          
           my $pvrlvd = HistoryVal ($hash, $pvd, $hod, 'pvrlvd', 1);
 
           if (!$pvrlvd) {                                                        # Datensatz ignorieren wenn als invalid gekennzeichnet
               debugLog ($paref, 'aiProcess', qq{AI raw data is marked as invalid and is ignored - day: $pvd, hod: $hod});
               next;
-          }
-
-          my $rad1h = HistoryVal ($hash, $pvd, $hod, 'rad1h', undef);
-          next if(!$rad1h || $rad1h <= 0);
-
-          my $pvrl  = HistoryVal ($hash, $pvd, $hod, 'pvrl', undef);
-          next if(!$pvrl || $pvrl <= 0);
-
-          my $ridx = _aiMakeIdxRaw ($pvd, $hod);
-
-          my $temp   = HistoryVal ($hash, $pvd, $hod, 'temp',  20);
-          my $wcc    = HistoryVal ($hash, $pvd, $hod, 'wcc',    0);
-          my $rr1c   = HistoryVal ($hash, $pvd, $hod, 'rr1c',   0);
-          my $sunalt = HistoryVal ($hash, $pvd, $hod, 'sunalt', 0);
-          my $sunaz  = HistoryVal ($hash, $pvd, $hod, 'sunaz',  0);
-
-          my $tbin  = temp2bin   ($temp);
-          my $cbin  = cloud2bin  ($wcc);
-          my $sabin = sunalt2bin ($sunalt);
-
-          $data{$name}{aidectree}{airaw}{$ridx}{rad1h}  = $rad1h;
-          $data{$name}{aidectree}{airaw}{$ridx}{temp}   = $tbin;
-          $data{$name}{aidectree}{airaw}{$ridx}{wcc}    = $cbin;
-          $data{$name}{aidectree}{airaw}{$ridx}{rr1c}   = $rr1c;
-          $data{$name}{aidectree}{airaw}{$ridx}{hod}    = $hod;
-          $data{$name}{aidectree}{airaw}{$ridx}{pvrl}   = $pvrl;
-          $data{$name}{aidectree}{airaw}{$ridx}{sunalt} = $sabin;
-          $data{$name}{aidectree}{airaw}{$ridx}{sunaz}  = $sunaz;
-
-          $dosave++;
-
-          debugLog ($paref, 'aiProcess', "AI raw add - idx: $ridx, day: $pvd, hod: $hod, sunalt: $sabin, sunaz: $sunaz, rad1h: $rad1h, pvrl: $pvrl, wcc: $cbin, rr1c: $rr1c, temp: $tbin", 4);
+          }         
+          
+          my $pvrl                                    = HistoryVal ($hash, $pvd, $hod, 'pvrl', undef);
+          $data{$name}{aidectree}{airaw}{$ridx}{pvrl} = $pvrl if(defined $pvrl && $pvrl  > 0);
+          
+          debugLog ($paref, 'aiProcess', "AI raw add - idx: $ridx, day: $pvd, hod: $hod, sunalt: $sabin, sunaz: $sunaz, rad1h: ".(defined $rad1h ? $rad1h : '-').", pvrl: ".(defined $pvrl ? $pvrl : '-').", con: ".(defined $con ? $con : '-').", wcc: ".(defined $cbin ? $cbin : '-').", rr1c: ".(defined $rr1c ? $rr1c : '-').", temp: ".(defined $tbin ? $tbin : '-'), 4);
       }
   }
 
@@ -17348,7 +17519,7 @@ sub aiDelRawData {
       return;
   }
 
-  my $hd   = AttrVal ($name, 'ctrlAIdataStorageDuration', $aistdudef);          # Haltezeit KI Raw Daten (Tage)
+  my $hd   = AttrVal ($name, 'ctrlAIdataStorageDuration', AISTDUDEF);          # Haltezeit KI Raw Daten (Tage)
   my $ht   = time - ($hd * 86400);
   my $day  = strftime "%d", localtime($ht);
   my $didx = _aiMakeIdxRaw ($day, '00', $ht);                                   # Daten mit idx <= $didx löschen
@@ -17516,7 +17687,7 @@ sub setPVhistory {
           
           ## Reorg Inverter 
           ##################           
-          for my $in (1..$maxinverter) {
+          for my $in (1..MAXINVERTER) {
               $in   = sprintf "%02d", $in;
               my $e = HistoryVal ($hash, $reorgday, $k, 'pvrl'.$in, undef);
               $ien->{$in} += $e if(defined $e);
@@ -17524,7 +17695,7 @@ sub setPVhistory {
           
           ## Reorg Producer
           ##################           
-          for my $pn (1..$maxproducer) {
+          for my $pn (1..MAXPRODUCER) {
               $pn   = sprintf "%02d", $pn;
               my $e = HistoryVal ($hash, $reorgday, $k, 'pprl'.$pn, undef);
               $pen->{$pn} += $e if(defined $e);
@@ -17532,7 +17703,7 @@ sub setPVhistory {
           
           ## Reorg Battery
           ##################           
-          for my $bn (1..$maxbatteries) {
+          for my $bn (1..MAXBATTERIES) {
               $bn   = sprintf "%02d", $bn;
               my $bi = HistoryVal ($hash, $reorgday, $k, 'batin'.$bn,  undef);
               my $bo = HistoryVal ($hash, $reorgday, $k, 'batout'.$bn, undef);
@@ -17663,16 +17834,19 @@ sub listDataPool {
       $sq = "<b>Number of datasets:</b> ".$maxcnt."\n";
 
       for my $idx (sort keys %{$h}) {
-          my $hod    = AiRawdataVal ($name, $idx, 'hod',    '-');
-          my $sunalt = AiRawdataVal ($name, $idx, 'sunalt', '-');
-          my $sunaz  = AiRawdataVal ($name, $idx, 'sunaz',  '-');
-          my $rad1h  = AiRawdataVal ($name, $idx, 'rad1h',  '-');
-          my $wcc    = AiRawdataVal ($name, $idx, 'wcc',    '-');
-          my $rr1c   = AiRawdataVal ($name, $idx, 'rr1c',   '-');
-          my $pvrl   = AiRawdataVal ($name, $idx, 'pvrl',   '-');
-          my $temp   = AiRawdataVal ($name, $idx, 'temp',   '-');
+          my $hod    = AiRawdataVal ($name, $idx, 'hod',     '-');
+          my $sunalt = AiRawdataVal ($name, $idx, 'sunalt',  '-');
+          my $sunaz  = AiRawdataVal ($name, $idx, 'sunaz',   '-');
+          my $rad1h  = AiRawdataVal ($name, $idx, 'rad1h',   '-');
+          my $wcc    = AiRawdataVal ($name, $idx, 'wcc',     '-');
+          my $rr1c   = AiRawdataVal ($name, $idx, 'rr1c',    '-');
+          my $pvrl   = AiRawdataVal ($name, $idx, 'pvrl',    '-');
+          my $temp   = AiRawdataVal ($name, $idx, 'temp',    '-');
+          my $nod    = AiRawdataVal ($name, $idx, 'dayname', '-');
+          my $con    = AiRawdataVal ($name, $idx, 'con',     '-');    
+          
           $sq       .= "\n";
-          $sq       .= "$idx => hod: $hod, sunaz: $sunaz, sunalt: $sunalt, rad1h: $rad1h, wcc: $wcc, rr1c: $rr1c, pvrl: $pvrl, temp: $temp";
+          $sq       .= "$idx => hod: $hod, nod: $nod, sunaz: $sunaz, sunalt: $sunalt, rad1h: $rad1h, wcc: $wcc, rr1c: $rr1c, pvrl: $pvrl, con: $con, temp: $temp";
       }
   }
 
@@ -17745,7 +17919,7 @@ sub _listDataPoolPvHist {
           }
 
           my ($inve, $invl);
-          for my $in (1..$maxinverter) {                                              # + alle Inverter
+          for my $in (1..MAXINVERTER) {                                              # + alle Inverter
               $in       = sprintf "%02d", $in;
               my $etoti = HistoryVal ($name, $day, $key, 'etotali'.$in, '-');
               my $pvrli = HistoryVal ($name, $day, $key, 'pvrl'.$in,    '-');
@@ -17762,7 +17936,7 @@ sub _listDataPoolPvHist {
           }
           
           my ($prde, $prdl);
-          for my $pn (1..$maxproducer) {                                              # + alle Producer
+          for my $pn (1..MAXPRODUCER) {                                              # + alle Producer
               $pn       = sprintf "%02d", $pn;
               my $etotp = HistoryVal ($name, $day, $key, 'etotalp'.$pn, '-');
               my $pprl  = HistoryVal ($name, $day, $key, 'pprl'.$pn,    '-');
@@ -17779,7 +17953,7 @@ sub _listDataPoolPvHist {
           }
           
           my ($btotin, $batin, $btotout, $batout, $batmsoc, $batssoc, $batsoc);
-          for my $bn (1..$maxbatteries) {                                            # + alle Batterien
+          for my $bn (1..MAXBATTERIES) {                                            # + alle Batterien
               $bn          = sprintf "%02d", $bn;
               my $hbtotin  = HistoryVal ($name, $day, $key, 'batintotal'.$bn,  '-');
               my $hbtotout = HistoryVal ($name, $day, $key, 'batouttotal'.$bn, '-');
@@ -17852,7 +18026,7 @@ sub _listDataPoolPvHist {
           $ret .= "\n            "                                 if($key eq '99');
 
           if ($key ne '99') {
-              $ret .= "wid: $wid, ";
+              $ret .= "weatherid: $wid, ";
               $ret .= "wcc: $wcc, ";
               $ret .= "rr1c: $rr1c, ";
               $ret .= "pvcorrf: $pvcorrf ";
@@ -17862,7 +18036,7 @@ sub _listDataPoolPvHist {
           $ret .= "dayname: $dayname, " if($dayname);
 
           my $csm;
-          for my $c (1..$maxconsumer) {                                                      # + alle Consumer
+          for my $c (1..MAXCONSUMER) {                                                      # + alle Consumer
               $c       = sprintf "%02d", $c;
               my $nl   = 0;
               my $csmc = HistoryVal ($name, $day, $key, "cyclescsm${c}",      undef);
@@ -18055,17 +18229,7 @@ sub _listDataPoolCircular {
       my $temp     = CircularVal ($hash, $idx, 'temp',                '-');
       my $pvcorrf  = CircularVal ($hash, $idx, 'pvcorrf',             '-');
       my $quality  = CircularVal ($hash, $idx, 'quality',             '-');
-      my $tdayDvtn = CircularVal ($hash, $idx, 'tdayDvtn',            '-');
-      my $ydayDvtn = CircularVal ($hash, $idx, 'ydayDvtn',            '-');
-      my $fitot    = CircularVal ($hash, $idx, 'feedintotal',         '-');
-      my $idfi     = CircularVal ($hash, $idx, 'initdayfeedin',       '-');
-      my $gcontot  = CircularVal ($hash, $idx, 'gridcontotal',        '-');
-      my $idgcon   = CircularVal ($hash, $idx, 'initdaygcon',         '-');
-      my $rtaitr   = CircularVal ($hash, $idx, 'runTimeTrainAI',      '-');
-      my $fsaitr   = CircularVal ($hash, $idx, 'aitrainLastFinishTs', '-');
-      my $airn     = CircularVal ($hash, $idx, 'aiRulesNumber',       '-');
-      my $aicts    = CircularVal ($hash, $idx, 'attrInvChangedTs',    '-');
-
+     
       my $pvcf = _ldchash2val ( {pool => $h, idx => $idx, key => 'pvcorrf', cval => $pvcorrf} );
       my $cfq  = _ldchash2val ( {pool => $h, idx => $idx, key => 'quality', cval => $quality} );
       my $pvrs = _ldchash2val ( {pool => $h, idx => $idx, key => 'pvrlsum', cval => $pvrlsum} );
@@ -18076,7 +18240,7 @@ sub _listDataPoolCircular {
 
       if ($idx != 99) {
           my $prdl;
-          for my $pn (1..$maxproducer) {                                              # alle Producer
+          for my $pn (1..MAXPRODUCER) {                                              # alle Producer
               $pn       = sprintf "%02d", $pn;
               my $pprl  = CircularVal ($hash, $idx, 'pprl'.$pn, '-'); 
               $prdl    .= ', ' if($prdl);
@@ -18084,7 +18248,7 @@ sub _listDataPoolCircular {
           }
           
           my ($bin, $bout);
-          for my $bn (1..$maxbatteries) {                                            # alle Batterien
+          for my $bn (1..MAXBATTERIES) {                                            # alle Batterien
               $bn = sprintf "%02d", $bn;
               my $batin  = CircularVal ($hash, $idx, 'batin'. $bn, '-');
               my $batout = CircularVal ($hash, $idx, 'batout'.$bn, '-');
@@ -18094,9 +18258,10 @@ sub _listDataPoolCircular {
               $bout     .= "batout${bn}: $batout";
           }
           
-            my ($pvrlnew, $pvfcnew);
-            my @pvrlkeys = map { $_ =~ /^pvrl_/xs ? $_ : '' } sort keys %{$h->{$idx}}; 
-            my @pvfckeys = map { $_ =~ /^pvfc_/xs ? $_ : '' } sort keys %{$h->{$idx}};                  
+            my ($pvrlnew, $pvfcnew, $conall);
+            my @pvrlkeys = map { $_ =~ /^pvrl_/xs   ? $_ : '' } sort keys %{$h->{$idx}}; 
+            my @pvfckeys = map { $_ =~ /^pvfc_/xs   ? $_ : '' } sort keys %{$h->{$idx}};  
+            my @conakeys = map { $_ =~ /^con_all/xs ? $_ : '' } sort keys %{$h->{$idx}};            
 
             for my $prl (@pvrlkeys) {
                 next if(!$prl);
@@ -18115,6 +18280,15 @@ sub _listDataPoolCircular {
                 $pvfcnew .= "\n      " if($pvfcnew);
                 $pvfcnew .= _ldchash2val ( { pool => $h, idx => $idx, key => $pfc, cval => $cref } );
             }
+            
+            for my $coa (@conakeys) {
+                next if(!$coa);
+                my $caref = CircularVal ($hash, $idx, $coa, ''); 
+                next if(!$caref);                  
+                
+                $conall .= "\n      " if($conall);
+                $conall .= _ldchash2val ( { pool => $h, idx => $idx, key => $coa, cval => $caref } );
+            }
           
           $sq .= $idx." => pvapifc: $pvapifc, pvaifc: $pvaifc, pvfc: $pvfc, aihit: $aihit, pvrl: $pvrl";
           $sq .= "\n      $bin";
@@ -18127,13 +18301,27 @@ sub _listDataPoolCircular {
           $sq .= "\n      pvrlsum: $pvrs";
           $sq .= "\n      pvfcsum: $pvfs";
           $sq .= "\n      dnumsum: $dnus";
+          $sq .= "\n      $conall"  if($conall);
           $sq .= "\n      $pvrlnew" if($pvrlnew);
           $sq .= "\n      $pvfcnew" if($pvfcnew);
       }
       else {
           my ($batvl1, $batvl2, $batvl3, $batvl4, $batvl5, $batvl6, $batvl7);
-          for my $bn (1..$maxbatteries) {                                            # + alle Batterien
-              $bn = sprintf "%02d", $bn;
+          
+          my $con      = CircularVal ($hash, $idx, 'todayConsumption',    '-');
+          my $gcontot  = CircularVal ($hash, $idx, 'gridcontotal',        '-');
+          my $idgcon   = CircularVal ($hash, $idx, 'initdaygcon',         '-');
+          my $idfi     = CircularVal ($hash, $idx, 'initdayfeedin',       '-');
+          my $fitot    = CircularVal ($hash, $idx, 'feedintotal',         '-');
+          my $tdayDvtn = CircularVal ($hash, $idx, 'tdayDvtn',            '-');
+          my $ydayDvtn = CircularVal ($hash, $idx, 'ydayDvtn',            '-');
+          my $rtaitr   = CircularVal ($hash, $idx, 'runTimeTrainAI',      '-');
+          my $fsaitr   = CircularVal ($hash, $idx, 'aitrainLastFinishTs', '-');
+          my $airn     = CircularVal ($hash, $idx, 'aiRulesNumber',       '-');
+          my $aicts    = CircularVal ($hash, $idx, 'attrInvChangedTs',    '-');
+          
+          for my $bn (1..MAXBATTERIES) {                                            # + alle Batterien
+              $bn          = sprintf "%02d", $bn;
               my $idbintot = CircularVal ($hash, $idx, 'initdaybatintot'. $bn, '-');
               my $idboutot = CircularVal ($hash, $idx, 'initdaybatouttot'.$bn, '-');
               my $bintot   = CircularVal ($hash, $idx, 'batintot'.        $bn, '-');
@@ -18158,7 +18346,7 @@ sub _listDataPoolCircular {
           }
           
           $sq .= $idx." => tdayDvtn: $tdayDvtn, ydayDvtn: $ydayDvtn \n";
-          $sq .= "      feedintotal: $fitot, initdayfeedin: $idfi \n";
+          $sq .= "      todayConsumption: $con, feedintotal: $fitot, initdayfeedin: $idfi \n";
           $sq .= "      gridcontotal: $gcontot, initdaygcon: $idgcon \n";
           $sq .= "      $batvl1\n";
           $sq .= "      $batvl2\n";
@@ -18212,7 +18400,7 @@ sub _listDataPoolNextHours {
       my $sunalt  = NexthoursVal ($name, $idx, 'sunalt',     '-');
       
       my ($rcdbat, $socs);
-      for my $bn (1..$maxbatteries) {                                            # alle Batterien
+      for my $bn (1..MAXBATTERIES) {                                            # alle Batterien
           $bn = sprintf "%02d", $bn;
           my $rcdcharge = NexthoursVal ($name, $idx, 'rcdchargebat'.$bn, '-');
           my $socxx     = NexthoursVal ($name, $idx, 'soc'.$bn, '-');
@@ -18551,7 +18739,7 @@ sub checkPlantConfig {
 
   setModel ($hash);                                                                            # Model setzen
 
-  my $lang        = AttrVal        ($name, 'ctrlLanguage', AttrVal ('global', 'language', $deflang));
+  my $lang        = AttrVal        ($name, 'ctrlLanguage', AttrVal ('global', 'language', DEFLANG));
   my $pcf         = ReadingsVal    ($name, 'pvCorrectionFactor_Auto', 'off');
   my $raname      = AttrVal        ($name, 'setupRadiationAPI',          '');
   my ($acu, $aln) = isAutoCorrUsed ($name);
@@ -18566,6 +18754,7 @@ sub checkPlantConfig {
       'Weather Properties'   => { 'state' => $ok, 'result' => '', 'note' => '', 'info' => 0, 'warn' => 0, 'fault' => 0 },
       'Common Settings'      => { 'state' => $ok, 'result' => '', 'note' => '', 'info' => 0, 'warn' => 0, 'fault' => 0 },
       'FTUI Widget Files'    => { 'state' => $ok, 'result' => '', 'note' => '', 'info' => 0, 'warn' => 0, 'fault' => 0 },
+      'Perl Modules'         => { 'state' => $ok, 'result' => '', 'note' => '', 'info' => 0, 'warn' => 0, 'fault' => 0 },
   };
 
   my $sub = sub {
@@ -18629,7 +18818,7 @@ sub checkPlantConfig {
   my $mosm = '';
   my $resh;
 
-  for my $step (1..$weatherDevMax) {
+  for my $step (1..MAXWEATHERDEV) {
       my ($valid, $fcname, $apiu) = isWeatherDevValid ($hash, 'setupWeatherDev'.$step);
       next if(!$fcname && $step ne 1);
 
@@ -18851,7 +19040,7 @@ sub checkPlantConfig {
 
   if (!$aiprep) {
       $result->{'Common Settings'}{state}   = $info;
-      $result->{'Common Settings'}{result} .= qq{The AI support is not used. <br>};
+      $result->{'Common Settings'}{result} .= qq{AI support for the PV forecast is not used. <br>};
       $result->{'Common Settings'}{note}   .= qq{$aiusemsg.<br>};
       $result->{'Common Settings'}{info}    = 1;
   }
@@ -18897,6 +19086,13 @@ sub checkPlantConfig {
   }
 
   if (isOpenMeteoUsed ($hash)) {                                                             # allg. Settings bei Nutzung Open-Meteo API
+      if ($aidtabs) {
+          $result->{'Common Settings'}{state}   = $info;
+          $result->{'Common Settings'}{result} .= qq{The Perl module AI::DecisionTree is missing. <br>};
+          $result->{'Common Settings'}{note}   .= qq{If you want use AI support, please install it with e.g. "sudo apt-get install libai-decisiontree-perl".<br>};
+          $result->{'Common Settings'}{info}    = 1;
+      }
+      
       if ($pcf !~ /on/xs) {
           $result->{'Common Settings'}{state}   = $info;
           $result->{'Common Settings'}{result} .= qq{pvCorrectionFactor_Auto is set to "$pcf" <br>};
@@ -19027,6 +19223,23 @@ sub checkPlantConfig {
       $result->{'Common Settings'}{note}   .= qq{event-on-change-reading, ctrlLanguage <br>};
   }
 
+  ## installierte Perl Module
+  #############################
+  if ($aidtabs) {
+      $result->{'Perl Modules'}{state}   = $info;
+      $result->{'Perl Modules'}{result} .= qq{The Perl module AI::DecisionTree is missing. <br>};
+      $result->{'Perl Modules'}{note}   .= qq{If you want use AI support, please install it with e.g. "sudo apt-get install libai-decisiontree-perl".<br>};
+      $result->{'Perl Modules'}{info}    = 1;
+  }
+
+  if (!$result->{'Perl Modules'}{info} && !$result->{'Perl Modules'}{warn} && !$result->{'Perl Modules'}{fault}) {
+      $result->{'Perl Modules'}{result} .= $hqtxt{fulfd}{$lang}.'<br>';
+      $result->{'Perl Modules'}{note}   .= qq{<br>checked installed Perl Modules: <br>};
+      $result->{'Perl Modules'}{note}   .= qq{AI::DecisionTree <br>};
+  }
+  
+  
+  
   ## FTUI Widget Support
   ########################
   my $tpath = "$root/www/tablet/css";
@@ -19038,7 +19251,7 @@ sub checkPlantConfig {
       $result->{'FTUI Widget Files'}{note}    .= qq{There is no need to install SolarForecast FTUI widgets.<br>};
   }
   else {
-      my $cfurl = $bPath.$cfile.$pPath;
+      my $cfurl = BPATH.CFILE.PPATH;
 
       for my $file (@fs) {
           ($cmerr, $cmupd, $cmmsg, $cmrec) = checkModVer ($name, $file, $cfurl);
@@ -19214,12 +19427,12 @@ return ($method, $surplus);
 #
 #  $aref  = Referenz zum Array
 #  $limit = die Anzahl Elemente auf die gekürzt werden soll
-#           (default $slidenummax)
+#           (default SLIDENUMMAX)
 #
 ################################################################
 sub limitArray {
   my $aref  = shift;
-  my $limit = shift // $slidenummax;
+  my $limit = shift // SLIDENUMMAX;
 
   return if(ref $aref ne 'ARRAY');
 
@@ -19241,7 +19454,7 @@ return;
 ################################################################
 sub avgArray {                  
   my $aref = shift;
-  my $num  = shift // $slidenummax;
+  my $num  = shift // SLIDENUMMAX;
   
   return undef if(ref $aref ne 'ARRAY' || scalar @{$aref} < $num);
   
@@ -19433,6 +19646,35 @@ return ($err, $ctime);
 }
 
 ################################################################
+#  Timestrings aus Startzeit Timestamp und gegebenen Offset (s)
+#  berechnen, Rückgabe als Hashreferenz
+################################################################
+sub timestringsFromOffset {                                           
+  my $epoch  = shift;
+  my $offset = shift // 0;
+  
+  return if($epoch !~ /^-?[0-9]*(.[0-9]*)?$/xs);
+
+  if (length ($epoch) == 13) {                                                                  # Millisekunden
+      $epoch = $epoch / 1000;
+  }
+  
+  my @ts = localtime ($epoch + $offset);                                                        # Offset kann pos. oder negativ sein
+  
+  my $dt = {
+      year    => (strftime "%Y",       (@ts)),                                                  # Jahr
+      month   => (strftime "%m",       (@ts)),                                                  # Monat
+      day     => (strftime "%d",       (@ts)),                                                  # Tag (range 01 .. 31)
+      date    => (strftime "%Y-%m-%d", (@ts)),                                                  # Datum
+      hour    => (strftime "%H",       (@ts)),                                                  # Stunde in 24h format (00-23)
+      minute  => (strftime "%M",       (@ts)),                                                  # Minute (00-59)
+      dayname => (strftime "%a",       (@ts)),                                                  # Wochentagsname
+  };
+
+return $dt;
+}
+
+################################################################
 #  Zeitstring der Form 2023-05-27T14:24:30+02:00 formatieren
 #  in YYYY-MM-TT hh:mm:ss
 ################################################################
@@ -19600,14 +19842,14 @@ sub createAssociatedWith {
           push @cd, $dswitch if($dswitch);
       }
       
-      for my $bn (1..$maxbatteries) {                                        # Battery Devices
+      for my $bn (1..MAXBATTERIES) {                                         # Battery Devices
           $bn       = sprintf "%02d", $bn;
           my $badev = AttrVal ($name, "setupBatteryDev${bn}", '');
           my ($aba) = parseParams ($badev);
           push @cd, $aba->[0] if($aba->[0]);
       }
       
-      for my $in (1..$maxinverter) {                                         # Inverter Devices
+      for my $in (1..MAXINVERTER) {                                          # Inverter Devices
           $in       = sprintf "%02d", $in;
           my $inc   = AttrVal ($name, "setupInverterDev${in}", '');
           my ($ind) = parseParams ($inc);
@@ -19622,7 +19864,7 @@ sub createAssociatedWith {
       push @nd, $radev  if($radev  && $radev  !~ /-API/xs);
       push @nd, $medev;
 
-      for my $prn (1..$maxproducer) {                                       # Producer Devices
+      for my $prn (1..MAXPRODUCER) {                                         # Producer Devices
           $prn      = sprintf "%02d", $prn;
           my $pdc   = AttrVal ($name, "setupOtherProducer${prn}", "");
           my ($prd) = parseParams ($pdc);
@@ -19666,7 +19908,7 @@ sub getConsumerPlanningMode {
   my $c    = shift;
 
   my $name = $hash->{NAME};
-  my $mode = ConsumerVal ($hash, $c, 'mode', $defcmode);                                    # Consumer Planungsmode
+  my $mode = ConsumerVal ($hash, $c, 'mode', DEFCMODE);                                    # Consumer Planungsmode
 
   if ($mode =~ /^(?:can|must)$/xs) {
       return $mode;
@@ -19678,16 +19920,16 @@ sub getConsumerPlanningMode {
   my ($err)     = isDeviceValid ( { name => $hash->{NAME}, obj => $dv, method => 'string' } );
 
   if ($err) {
-      Log3 ($name, 1, qq{$name - ERROR - consumer >$c< - The device '$dv' in consumer key 'mode' doesn't exist. Fall back to '$defcmode' mode.});
-      return $defcmode;
+      Log3 ($name, 1, qq{$name - ERROR - consumer >$c< - The device '$dv' in consumer key 'mode' doesn't exist. Fall back to 'DEFCMODE' mode.});
+      return DEFCMODE;
   }
   
   $err  = q{};
   $mode = ReadingsVal ($dv, $rd, '');
   
   if ($mode !~ /^(?:can|must)$/xs) {
-      Log3 ($name, 1, qq{$name - ERROR - consumer >$c< - The reading '$rd' of device '$dv' is invalid or doesn't contain a valid mode. Fall back to '$defcmode' mode.});
-      return $defcmode;
+      Log3 ($name, 1, qq{$name - ERROR - consumer >$c< - The reading '$rd' of device '$dv' is invalid or doesn't contain a valid mode. Fall back to 'DEFCMODE' mode.});
+      return DEFCMODE;
   }
 
 return $mode;
@@ -19725,7 +19967,7 @@ return;
 sub controller {
   my $name = shift;
 
-  my $interval = AttrVal    ($name, 'ctrlInterval', $definterval);            # 0 wenn manuell gesteuert
+  my $interval = AttrVal    ($name, 'ctrlInterval', DEFINTERVAL);            # 0 wenn manuell gesteuert
   my $idval    = IsDisabled ($name);
   my $disabled = $idval == 1 ? 1 : 0;
   my $inactive = $idval == 3 ? 1 : 0;
@@ -19867,7 +20109,7 @@ return 0;
 #  Funktion liefert 1 wenn Consumer logisch "eingeschaltet"
 #  ist, d.h. wenn der Energieverbrauch über einem bestimmten
 #  Schwellenwert oder der prozentuale Verbrauch über dem
-#  Defaultwert $defpopercent ist.
+#  Defaultwert DEFPOPERCENT ist.
 #
 #  Logisch "on" schließt physisch "on" mit ein.
 ################################################################
@@ -19903,7 +20145,7 @@ sub isConsumerLogOn {
 
   $data{$name}{consumers}{$c}{currpowerpercent} = $currpowerpercent;
 
-  if ($pcurr > $pthreshold || $currpowerpercent > $defpopercent) {                          # Verbraucher ist logisch aktiv
+  if ($pcurr > $pthreshold || $currpowerpercent > DEFPOPERCENT) {                          # Verbraucher ist logisch aktiv
       return 1;
   }
 
@@ -20168,7 +20410,7 @@ sub isBatteryUsed {
   
   my $valid = 0;
 
-  for my $bn (1..$maxbatteries) {
+  for my $bn (1..MAXBATTERIES) {
       $bn = sprintf "%02d", $bn;
       my ($err) = isDeviceValid ( { name => $name, obj => 'setupBatteryDev'.$bn, method => 'attr' } );
       next if($err);
@@ -20355,7 +20597,7 @@ sub isSunPath {
   my $c    = shift;
 
   my $is      = 0;
-  my $mintime = ConsumerVal ($hash, $c, 'mintime', $defmintime);
+  my $mintime = ConsumerVal ($hash, $c, 'mintime', DEFMINTIME);
 
   if ($mintime =~ /SunPath/xsi) {
       $is = 1;
@@ -20444,8 +20686,10 @@ sub isWeatherDevValid {
   my $valid  = '';
   my $apiu   = '';
   my $fcname = AttrVal ($hash->{NAME}, $wdev, '');                                            # Weather Forecast Device
+  
+  return if(!$fcname);
 
-  if ($fcname) { $valid = 1  }
+  $valid = 1;
   if (!$defs{$fcname} || $defs{$fcname}{TYPE} ne "DWD_OpenData") { $valid = '' }
   
   my ($rapi, $wapi) = getStatusApiName ($hash);                                              # $rapi - Radiation-API, $wapi - Weather-API
@@ -20494,7 +20738,7 @@ sub isWeatherAgeExceeded {
 
   my ($newts, $th);
 
-  for my $step (1..$weatherDevMax) {
+  for my $step (1..MAXWEATHERDEV) {
       my ($valid, $fcname, $apiu) = isWeatherDevValid ($hash, 'setupWeatherDev'.$step);
       next if(!$fcname && $step ne 1);
 
@@ -20767,7 +21011,7 @@ sub getLang {
   my $hash = shift;
 
   my $name  = $hash->{NAME};
-  my $glang = AttrVal ('global', 'language', $deflang);
+  my $glang = AttrVal ('global', 'language', DEFLANG);
   my $lang  = AttrVal ($name, 'ctrlLanguage', $glang);
 
 return $lang;
@@ -20829,22 +21073,29 @@ return ($rapi, $wapi);
 sub temp2bin {
   my $val = shift;
 
-  my $bin = $val > 35 ? 35 :
-            $val > 32 ? 35 :
-            $val > 30 ? 30 :
-            $val > 27 ? 30 :
-            $val > 25 ? 25 :
-            $val > 22 ? 25 :
-            $val > 20 ? 20 :
-            $val > 17 ? 20 :
-            $val > 15 ? 15 :
-            $val > 12 ? 15 :
-            $val > 10 ? 10 :
-            $val > 7  ? 10 :
-            $val > 5  ? 5  :
-            $val > 2  ? 5  :
-            $val > 0  ? 0  :
-            -5;
+  my $bin = $val > 35  ? 35  :
+            $val > 32  ? 35  :
+            $val > 30  ? 30  :
+            $val > 27  ? 30  :
+            $val > 25  ? 25  :
+            $val > 22  ? 25  :
+            $val > 20  ? 20  :
+            $val > 17  ? 20  :
+            $val > 15  ? 15  :
+            $val > 12  ? 15  :
+            $val > 10  ? 10  :
+            $val > 7   ? 10  :
+            $val > 5   ? 5   :
+            $val > 2   ? 5   :
+            $val > 0   ? 0   :
+            $val > -2  ? 0   :
+            $val > -5  ? -5  :
+            $val > -7  ? -5  :
+            $val > -10 ? -10 :
+            $val > -12 ? -10 :
+            $val > -15 ? -15 :
+            $val > -17 ? -15 :
+            -20;
 
 return $bin;
 }
@@ -21084,12 +21335,14 @@ sub lineFromSpaces {
 
   my @sps = split "\n", $str;
   my $mlen = 1;
-
+  
   for my $s (@sps) {
-      my $len = length (trim $s);
+      my $len = length ($s);
       $mlen   = $len if($len && $len > $mlen);
   }
-
+  
+  $mlen = $mlen > LPOOLLENLIM ? LPOOLLENLIM : $mlen;                            
+  
   my $ret = "\n";
   $ret   .= "&nbsp;" x ($mlen + $an);
 
@@ -21152,8 +21405,8 @@ return;
 #             rr1c           - Gesamtniederschlag (1-stündig) letzte 1 Stunde kg/m2
 #             pvcorrf        - PV Autokorrekturfaktor f. Stunde des Tages
 #             dayname        - Tagesname (Kürzel)
-#             csmt${c}       - Totalconsumption Consumer $c (1..$maxconsumer)
-#             csme${c}       - Consumption Consumer $c (1..$maxconsumer) in $hod
+#             csmt${c}       - Totalconsumption Consumer $c (1..MAXCONSUMER)
+#             csme${c}       - Consumption Consumer $c (1..MAXCONSUMER) in $hod
 #             sunaz          - Azimuth der Sonne (in Dezimalgrad)
 #             sunalt         - Höhe der Sonne (in Dezimalgrad)
 #    $def: Defaultwert
@@ -21207,7 +21460,7 @@ return $def;
 #             pvcorrf            - PV Autokorrekturfaktoren (<Sonne Altitude>.<Cloudcover> = Faktor)
 #             lastTsMaxSocRchdXX - Timestamp des letzten Erreichens von SoC >= maxSoC
 #             nextTsMaxSocChgeXX - Timestamp bis zu dem die Batterie mindestens einmal maxSoC erreichen soll
-#             days2careXX        - verbleibende Tage bis der Batterie XX Pflege-SoC (default $maxSoCdef) erreicht sein soll
+#             days2careXX        - verbleibende Tage bis der Batterie XX Pflege-SoC (default MAXSOCDEF) erreicht sein soll
 #             tdayDvtn           - heutige Abweichung PV Prognose/Erzeugung in %
 #             ydayDvtn           - gestrige Abweichung PV Prognose/Erzeugung in %
 #             initdayfeedin      - initialer Wert für "gridfeedin" zu Beginn des Tages (Wh)
@@ -22579,7 +22832,7 @@ to ensure that the system configuration is correct.
       The 'exportToCsv' specification exports the entire content of the pvHistory to a CSV file. <br>
 
       The hour specifications refer to the respective hour of the day, e.g. the hour 09 refers to the time from
-      08 o'clock to 09 o'clock.
+      08 o'clock to 09 o'clock. The hour '99' contains daily values.
       <br><br>
 
       <ul>
@@ -22598,6 +22851,7 @@ to ensure that the system configuration is correct.
             <tr><td> <b>csmtXX</b>         </td><td>total energy consumption of ConsumerXX                                                                                   </td></tr>
             <tr><td> <b>csmeXX</b>         </td><td>Energy consumption of ConsumerXX in the hour of the day (hour 99 = daily energy consumption)                             </td></tr>
             <tr><td> <b>cyclescsmXX</b>    </td><td>Number of active cycles of ConsumerXX of the day                                                                         </td></tr>
+            <tr><td> <b>dayname</b>        </td><td>short name of the day (locale-dependent)                                                                                 </td></tr>
             <tr><td> <b>DoN</b>            </td><td>Sunrise and sunset status (0 - night, 1 - day)                                                                           </td></tr>
             <tr><td> <b>etotaliXX</b>      </td><td>PV meter reading “Total energy yield” (Wh) of inverter XX at the beginning of the hour                                   </td></tr>
             <tr><td> <b>etotalpXX</b>      </td><td>Meter reading “Total energy yield” (Wh) of producer XX at the beginning of the hour                                      </td></tr>
@@ -22644,7 +22898,7 @@ to ensure that the system configuration is correct.
             <tr><td> <b>batoutXX</b>            </td><td>Battery XX discharge (Wh)                                                                                             </td></tr>
             <tr><td> <b>batouttotXX</b>         </td><td>total energy drawn from the battery XX (Wh)                                                                           </td></tr>
             <tr><td> <b>batintotXX</b>          </td><td>current total energy charged into the battery XX (Wh)                                                                 </td></tr>
-            <tr><td> <b>confc</b>               </td><td>expected energy consumption (Wh)                                                                                      </td></tr>
+            <tr><td> <b>confc</b>               </td><td>expected energy consumption (Wh) of the house on the current day                                                      </td></tr>
             <tr><td> <b>days2careXX</b>         </td><td>remaining days until the battery XX maintenance SoC (default 95%) is reached                                          </td></tr>
             <tr><td> <b>dnumsum</b>             </td><td>Number of days per cloudy area over the entire term                                                                   </td></tr>
             <tr><td> <b>feedintotal</b>         </td><td>total PV energy fed into the public grid (Wh)                                                                         </td></tr>
@@ -22671,6 +22925,7 @@ to ensure that the system configuration is correct.
             <tr><td> <b>runTimeTrainAI</b>      </td><td>Duration of the last AI training                                                                                      </td></tr>
             <tr><td> <b>aitrainLastFinishTs</b> </td><td>Timestamp of the last successful AI training                                                                          </td></tr>
             <tr><td> <b>aiRulesNumber</b>       </td><td>Number of rules in the trained AI instance                                                                            </td></tr>
+            <tr><td> <b>todayConsumption</b>    </td><td>real energy consumption (Wh) of the house on the current day                                                          </td></tr>
             <tr><td> <b>tdayDvtn</b>            </td><td>Today's deviation PV forecast/generation in %                                                                         </td></tr>
             <tr><td> <b>temp</b>                </td><td>Outdoor temperature                                                                                                   </td></tr>
             <tr><td> <b>wcc</b>                 </td><td>Degree of cloud cover                                                                                                 </td></tr>
@@ -22788,17 +23043,21 @@ to ensure that the system configuration is correct.
       <a id="SolarForecast-get-valDecTree"></a>
       <li><b>valDecTree </b> <br><br>
 
-      If AI support is activated in the SolarForecast Device, various AI-relevant data can be displayed                      :
+      Display of AI-relevant data.
+      The available display options depend on the available and activated AI support level. 
       <br><br>
 
       <ul>
        <table>
        <colgroup> <col width="20%"> <col width="80%"> </colgroup>
-          <tr><td> <b>aiRawData</b>     </td><td>The PV, radiation and environmental data currently stored for the AI.           </td></tr>
-          <tr><td> <b>aiRuleStrings</b> </td><td>Returns a list that describes the AI's decision tree in the form of rules.      </td></tr>
-          <tr><td>                      </td><td><b>Note:</b> While the order of the rules is not predictable, the               </td></tr>
-          <tr><td>                      </td><td>order of criteria within each rule, however, reflects the order                 </td></tr>
-          <tr><td>                      </td><td>in which the criteria are considered in the decision-making process.            </td></tr>
+          <tr><td> <b>aiRawData</b>     </td><td>Display of the PV, radiation and environmental data currently stored for the AI.       </td></tr>
+          <tr><td>                      </td><td>(available if the Perl module AI::DecisionTree is installed)                           </td></tr>
+          <tr><td>                      </td><td>                                                                                       </td></tr>
+          <tr><td> <b>aiRuleStrings</b> </td><td>Returns a list that describes the AI's decision tree in the form of rules.             </td></tr>
+          <tr><td>                      </td><td><b>Note:</b> While the order of the rules is not predictable, the                      </td></tr>
+          <tr><td>                      </td><td>order of criteria within each rule, however, reflects the order                        </td></tr>
+          <tr><td>                      </td><td>in which the criteria are considered in the decision-making process.                   </td></tr>
+          <tr><td>                      </td><td>(available if an AI-compatible SolarForecast MODEL of the PV forecast is activated)    </td></tr>
         </table>
       </ul>
     </li>
@@ -22863,18 +23122,6 @@ to ensure that the system configuration is correct.
       <a id="SolarForecast-get-weatherApiData"></a>
       <li><b>weatherApiData </b> <br><br>
       Shows the data supplied by the selected weather API.
-      </li>
-    </ul>
-    <br>
-    
-    <ul>
-      <a id="SolarForecast-get-x_migrate"></a>
-      <li><b>x_migrate </b> <br><br>
-      Migrates the existing PV Real and PV Forecast values in the ring buffer a new data structure. <br>
-      From the time of the changeover, the correction factors for the PV forecast will be determined using a median calculation
-      instead of the previous average calculation. <br><br>
-      
-      <b>x_migrate is a special function. Please clarify any ambiguities in the SolarForecast forum before execution! </b>
       </li>
     </ul>
     <br>
@@ -22950,7 +23197,7 @@ to ensure that the system configuration is correct.
          <ul>
          <table>
          <colgroup> <col width="18%"> <col width="82%"> </colgroup>
-            <tr><td> <b>&lt;Icon&gt@&lt;Colour&gt</b> </td><td>Activation recommendation is represented by icon and colour (optional) (default: light_light_dim_100@gold)  </td></tr>
+            <tr><td> <b>&lt;Icon&gt@&lt;Colour&gt</b> </td><td>Activation recommendation is represented by icon and colour (optional) (default: clock@gold)                </td></tr>
             <tr><td>                                  </td><td>(the planning data is displayed as mouse-over text)                                                         </td></tr>
             <tr><td> <b>times</b>                     </td><td>the planning status and the planned switching times are displayed as text                                   </td></tr>
             <tr><td> <b>none</b>                      </td><td>no display of the planning data                                                                             </td></tr>
@@ -23412,6 +23659,7 @@ to ensure that the system configuration is correct.
             <tr><td> <b>runTimeLastAPIProc</b>         </td><td>the last process time for processing the received radiation data API data                                            </td></tr>
             <tr><td> <b>SunMinutes_Remain</b>          </td><td>the remaining minutes until sunset of the current day                                                                </td></tr>
             <tr><td> <b>SunHours_Remain</b>            </td><td>the remaining hours until sunset of the current day                                                                  </td></tr>
+            <tr><td> <b>todayConsumption</b>           </td><td>the energy consumption of the house on the current day                                                               </td></tr>
             <tr><td> <b>todayConsumptionForecast</b>   </td><td>Consumption forecast per hour of the current day (01-24)                                                             </td></tr>
             <tr><td> <b>todayConForecastTillSunset</b> </td><td>Consumption forecast from current hour to hour before sunset                                                         </td></tr>
             <tr><td> <b>todayDoneAPIcalls</b>          </td><td>the number of radiation data API calls executed on the current day                                                   </td></tr>
@@ -23902,7 +24150,7 @@ to ensure that the system configuration is correct.
            <tr><td> <b>intotal</b>   </td><td>Reading which provides the total battery charge as a continuous counter (optional)                            </td></tr>
            <tr><td> <b>outtotal</b>  </td><td>Reading which provides the total battery discharge as a continuous counter (optional)                         </td></tr>
            <tr><td> <b>cap</b>       </td><td>installed battery capacity. Option can be:                                                                    </td></tr>
-           <tr><td>                  </td><td><b>numerical value</b> - direct indication of the battery capacity in Wh                                      </td></tr>
+           <tr><td>                  </td><td><b>numerical value</b> - direct specification of the battery capacity in Wh without specifying the unit!      </td></tr>
            <tr><td>                  </td><td><b>&lt;Readingname&gt;:&lt;unit&gt;</b> - Reading which provides the capacity and unit (Wh, kWh)              </td></tr>
            <tr><td> <b>charge</b>    </td><td>Reading which provides the current state of charge (SOC in percent) (optional)                                </td></tr>
            <tr><td> <b>Unit</b>      </td><td>the respective unit (W,Wh,kW,kWh)                                                                             </td></tr>
@@ -25072,7 +25320,7 @@ die ordnungsgemäße Anlagenkonfiguration geprüft werden.
       Die Angabe 'exportToCsv' exportiert den gesamten Inhalt der pvHistory in eine CSV-Datei. <br>
 
       Die Stundenangaben beziehen sich auf die jeweilige Stunde des Tages, z.B. bezieht sich die Stunde 09 auf die Zeit
-      von 08 Uhr bis 09 Uhr.
+      von 08 Uhr bis 09 Uhr. Die Stunde '99' enthält Tageswerte.
       <br><br>
 
       <ul>
@@ -25091,6 +25339,7 @@ die ordnungsgemäße Anlagenkonfiguration geprüft werden.
             <tr><td> <b>con</b>             </td><td>realer Energieverbrauch (Wh) des Hauses                                                            </td></tr>
             <tr><td> <b>conprice</b>        </td><td>Preis für den Bezug einer kWh. Die Einheit des Preises ist im setupMeterDev definiert.             </td></tr>
             <tr><td> <b>cyclescsmXX</b>     </td><td>Anzahl aktive Zyklen von ConsumerXX des Tages                                                      </td></tr>
+            <tr><td> <b>dayname</b>         </td><td>Kurzname des Tages (locale-abhängig)                                                               </td></tr>
             <tr><td> <b>DoN</b>             </td><td>Sonnenauf- und untergangsstatus (0 - Nacht, 1 - Tag)                                               </td></tr>
             <tr><td> <b>etotaliXX</b>       </td><td>PV Zählerstand "Energieertrag total" (Wh) von Inverter XX zu Beginn der Stunde                     </td></tr>
             <tr><td> <b>etotalpXX</b>       </td><td>Zählerstand "Energieertrag total" (Wh) des Produzenten XX zu Beginn der Stunde                     </td></tr>
@@ -25138,7 +25387,7 @@ die ordnungsgemäße Anlagenkonfiguration geprüft werden.
             <tr><td> <b>batoutXX</b>            </td><td>Entladung der Batterie XX (Wh)                                                                                            </td></tr>
             <tr><td> <b>batouttotXX</b>         </td><td>aktuell total aus der Batterie XX entnommene Energie (Wh)                                                                 </td></tr>
             <tr><td> <b>batintotXX</b>          </td><td>aktuell total in die Batterie XX geladene Energie (Wh)                                                                    </td></tr>
-            <tr><td> <b>confc</b>               </td><td>erwarteter Energieverbrauch (Wh)                                                                                          </td></tr>
+            <tr><td> <b>confc</b>               </td><td>erwarteter Energieverbrauch (Wh) des Hauses am aktuellen Tag                                                              </td></tr>
             <tr><td> <b>days2careXX</b>         </td><td>verbleibende Tage bis der Batterie XX Pflege-SoC (default 95%) erreicht sein soll                                         </td></tr>
             <tr><td> <b>dnumsum</b>             </td><td>Anzahl Tage pro Bewölkungsbereich über die gesamte Laufzeit                                                               </td></tr>
             <tr><td> <b>feedintotal</b>         </td><td>in das öffentliche Netz total eingespeiste PV Energie (Wh)                                                                </td></tr>
@@ -25165,6 +25414,7 @@ die ordnungsgemäße Anlagenkonfiguration geprüft werden.
             <tr><td> <b>runTimeTrainAI</b>      </td><td>Laufzeit des letzten KI Trainings                                                                                         </td></tr>
             <tr><td> <b>aitrainLastFinishTs</b> </td><td>Timestamp des letzten erfolgreichen KI Trainings                                                                          </td></tr>
             <tr><td> <b>aiRulesNumber</b>       </td><td>Anzahl der Regeln in der trainierten KI Instanz                                                                           </td></tr>
+            <tr><td> <b>todayConsumption</b>    </td><td>realer Energieverbrauch (Wh) des Hauses am aktuellen Tag                                                                  </td></tr>
             <tr><td> <b>tdayDvtn</b>            </td><td>heutige Abweichung PV Prognose/Erzeugung in %                                                                             </td></tr>
             <tr><td> <b>temp</b>                </td><td>Außentemperatur                                                                                                           </td></tr>
             <tr><td> <b>wcc</b>                 </td><td>Grad der Wolkenüberdeckung                                                                                                </td></tr>
@@ -25281,17 +25531,21 @@ die ordnungsgemäße Anlagenkonfiguration geprüft werden.
       <a id="SolarForecast-get-valDecTree"></a>
       <li><b>valDecTree </b> <br><br>
 
-      Ist der KI Support im SolarForecast Device aktiviert, können verschiedene KI relevante Daten angezeigt werden                  :
+      Anzeige von KI relevanten Daten.
+      Die verfügbaren Anzeigeoptionen sind abhängig vom verfügbaren und aktivierten KI Unterstützungslevel. 
       <br><br>
 
       <ul>
        <table>
        <colgroup> <col width="15%"> <col width="85%"> </colgroup>
-          <tr><td> <b>aiRawData</b>     </td><td>Die aktuell für die KI gespeicherten PV-, Strahlungs- und Umweltdaten.                     </td></tr>
+          <tr><td> <b>aiRawData</b>     </td><td>Anzeige der aktuell für die KI gespeicherten PV-, Strahlungs- und Umweltdaten.             </td></tr>
+          <tr><td>                      </td><td>(verfügbar wenn das Perl Modul AI::DecisionTree installiert ist)                           </td></tr>
+          <tr><td>                      </td><td>                                                                                           </td></tr>
           <tr><td> <b>aiRuleStrings</b> </td><td>Gibt eine Liste zurück, die den Entscheidungsbaum der KI in Form von Regeln beschreibt.    </td></tr>
           <tr><td>                      </td><td><b>Hinweis:</b> Die Reihenfolge der Regeln ist zwar nicht vorhersehbar, die                </td></tr>
           <tr><td>                      </td><td>Reihenfolge der Kriterien innerhalb jeder Regel spiegelt jedoch die Reihenfolge            </td></tr>
           <tr><td>                      </td><td>wider, in der die Kriterien bei der Entscheidungsfindung geprüft werden.                   </td></tr>
+          <tr><td>                      </td><td>(verfügbar wenn ein KI kompatibles SolarForecast MODEL der PV Vorhersage aktiviert ist)    </td></tr>
         </table>
       </ul>
     </li>
@@ -25355,18 +25609,6 @@ die ordnungsgemäße Anlagenkonfiguration geprüft werden.
       <a id="SolarForecast-get-weatherApiData"></a>
       <li><b>weatherApiData </b> <br><br>
       Zeigt die gelieferten Daten der gewählten Wetter-API.
-      </li>
-    </ul>
-    <br>
-    
-    <ul>
-      <a id="SolarForecast-get-x_migrate"></a>
-      <li><b>x_migrate </b> <br><br>
-      Migriert die vorhandenen PV Real und PV Forecast Werte im Ringspeicher in eine neue Datenstruktur. <br>
-      Ab dem Zeitpunkt der Umstellung werden die Korrekturfaktoren für die PV Vorhersage über eine Median Berechnung
-      statt der bisherigen Durchschnittberechnung ermittelt. <br><br>
-      
-      <b>x_migrate ist eine spezielle Funktion. Unklarheiten bitte vor Ausführung im SolarForecast Forum klären! </b>
       </li>
     </ul>
     <br>
@@ -25442,7 +25684,7 @@ die ordnungsgemäße Anlagenkonfiguration geprüft werden.
          <ul>
          <table>
          <colgroup> <col width="18%"> <col width="82%"> </colgroup>
-            <tr><td> <b>&lt;Icon&gt@&lt;Farbe&gt</b>  </td><td>Aktivierungsempfehlung wird durch Icon und Farbe (optional) dargestellt (default: light_light_dim_100@gold)   </td></tr>
+            <tr><td> <b>&lt;Icon&gt@&lt;Farbe&gt</b>  </td><td>Aktivierungsempfehlung wird durch Icon und Farbe (optional) dargestellt (default: clock@gold)                 </td></tr>
             <tr><td>                                  </td><td>(die Planungsdaten werden als Mouse-Over Text angezeigt)                                                      </td></tr>
             <tr><td> <b>times</b>                     </td><td>es werden der Planungsstatus und die geplanten Schaltzeiten als Text angezeigt                                </td></tr>
             <tr><td> <b>none</b>                      </td><td>keine Anzeige der Planungsdaten                                                                               </td></tr>
@@ -25904,6 +26146,7 @@ die ordnungsgemäße Anlagenkonfiguration geprüft werden.
             <tr><td> <b>runTimeLastAPIProc</b>         </td><td>die letzte Prozesszeit zur Verarbeitung der empfangenen Strahlungsdaten-API Daten                               </td></tr>
             <tr><td> <b>SunMinutes_Remain</b>          </td><td>die verbleibenden Minuten bis Sonnenuntergang des aktuellen Tages                                               </td></tr>
             <tr><td> <b>SunHours_Remain</b>            </td><td>die verbleibenden Stunden bis Sonnenuntergang des aktuellen Tages                                               </td></tr>
+            <tr><td> <b>todayConsumption</b>           </td><td>der Energieverbrauch des Hauses am aktuellen Tag                                                                </td></tr>
             <tr><td> <b>todayConsumptionForecast</b>   </td><td>Verbrauchsprognose pro Stunde des aktuellen Tages (01-24)                                                       </td></tr>
             <tr><td> <b>todayConForecastTillSunset</b> </td><td>Verbrauchsprognose von aktueller Stunde bis Stunde vor Sonnenuntergang                                          </td></tr>
             <tr><td> <b>todayDoneAPIcalls</b>          </td><td>die Anzahl der am aktuellen Tag ausgeführten Strahlungsdaten-API Calls                                          </td></tr>
@@ -26392,7 +26635,7 @@ die ordnungsgemäße Anlagenkonfiguration geprüft werden.
            <tr><td> <b>intotal</b>   </td><td>Reading welches die totale Batterieladung als fortlaufenden Zähler liefert (optional)                    </td></tr>
            <tr><td> <b>outtotal</b>  </td><td>Reading welches die totale Batterieentladung als fortlaufenden Zähler liefert (optional)                 </td></tr>
            <tr><td> <b>cap</b>       </td><td>installierte Batteriekapazität. Option kann sein:                                                        </td></tr>
-           <tr><td>                  </td><td><b>numerischer Wert</b> - direkte Angabe der Batteriekapazität in Wh                                     </td></tr>
+           <tr><td>                  </td><td><b>numerischer Wert</b> - direkte Angabe der Batteriekapazität in Wh ohne die Einheit anzugeben!         </td></tr>
            <tr><td>                  </td><td><b>&lt;Readingname&gt;:&lt;Einheit&gt;</b> - Reading welches die Kapazität liefert und Einheit (Wh, kWh) </td></tr>
            <tr><td> <b>charge</b>    </td><td>Reading welches den aktuellen Ladezustand (SOC in Prozent) liefert (optional)                            </td></tr>
            <tr><td> <b>Einheit</b>   </td><td>die jeweilige Einheit (W,Wh,kW,kWh)                                                                      </td></tr>
