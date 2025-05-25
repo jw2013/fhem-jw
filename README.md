@@ -55,7 +55,7 @@ Cons:
  - many indirect calls to map APIs
  - no support for MONOTONIC time
  
-Example: IO::Async::Loop::FHEM
+Example: [IO::Async::Loop::FHEM](fhem/lib/IO/Async/Loop/FHEM.pm)
 
 ### 2. Hybrid FHEM+IO::Async Loop
 
