@@ -94,6 +94,6 @@ There are two different clocks in POSIX, the realtime clock, and the monotonic c
 
 While the realtime clock is supposed to always return a value equal to the network time, and might sometimes change abruptly, the monotonic clock ignores any time adjustments.
 
-Timers, that shall fire 'at' a specific time (e.g. cronjobs), shall use the realtime clock.
-Timers, that shall fire 'after' a specific time (e.g. timeouts), shall use the monotonic clock.
+- Timers, that shall fire 'at' a specific point in time (e.g. cronjobs), shall use the realtime clock.
+- Timers, that shall fire 'after' a specific period of seconds (e.g. timeouts), shall use the monotonic clock.
 
